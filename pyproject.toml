@@ -5,7 +5,7 @@ description = "Synthetic anomaly pipeline with PatchCore training — SAM3 maski
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "click>=8.0.3",
-    "faiss-gpu==1.7.2",
+    "faiss-cpu>=1.7.0",
     "matplotlib>=3.10.8",
     "pillow>=12.1.0",
     "pretrainedmodels>=0.7.4",
@@ -28,7 +28,9 @@ dependencies = [
 ]
 
 [tool.uv]
-dev-dependencies = [
+
+[dependency-groups]
+dev = [
     "pytest>=8.0.0",
 ]
 
