@@ -1,0 +1,43 @@
+[project]
+name = "dino-core-v1"
+version = "0.1.0"
+description = "Synthetic anomaly pipeline with PatchCore training — SAM3 masking, DINOv3 clustering, and anomaly detection"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "click>=8.0.3",
+    "faiss-gpu==1.7.2",
+    "matplotlib>=3.10.8",
+    "pillow>=12.1.0",
+    "pretrainedmodels>=0.7.4",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "scikit-image>=0.26.0",
+    "scikit-learn>=1.5,<1.7",
+    "scipy>=1.17.0",
+    "timm>=0.6.0",
+    "torch>=2.8.0",
+    "torchvision>=0.23.0",
+    "tqdm>=4.67.1",
+    "transformers>=4.40.0",
+    "umap-learn>=0.5.5",
+    "sam2>=1.0.0",
+    "sam3 @ git+https://github.com/facebookresearch/sam3.git",
+    "rfdetr>=1.0.0",
+    "cuml-cu12>=25.6.0",
+    "opensimplex>=0.4.5.1",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

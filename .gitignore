@@ -1,0 +1,38 @@
+# Model weights
+weights/
+
+# Datasets
+dataset/
+
+# MLflow data
+mlflow_data/
+
+# Output
+output/
+output.png
+
+# Results and models
+results/
+models/
+
+# Virtual environments
+.venv/
+.venv-dino/
+
+# ONNX models
+*.onnx
+
+# PyTorch checkpoints
+*.pt
+*.pth
+*.ckpt
+
+# Pickle
+*.pkl
+
+# Faiss index
+*.faiss
+
+# Python cache
+__pycache__/
+*.pyc
