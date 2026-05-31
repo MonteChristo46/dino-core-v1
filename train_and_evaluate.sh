@@ -14,25 +14,14 @@ SEED="${SEED:-0}"
 IMAGE_SIZE="${IMAGE_SIZE:-224}"
 RESIZE="${RESIZE:-256}"
 BACKBONE="${BACKBONE:-dinov3_vitl}"
-LAYERS="${LAYERS:-2 3}"
+LAYERS="${LAYERS:-24}"
 CORESET_PERCENTAGE="${CORESET_PERCENTAGE:-0.1}"
 PRETRAIN_DIM="${PRETRAIN_DIM:-1024}"
 TARGET_DIM="${TARGET_DIM:-1024}"
 PATCH_SIZE="${PATCH_SIZE:-3}"
-NUM_NN="${NUM_NN:-1}"
-
-if [[ "${BACKBONE}" == dinov3* ]]; then
-    if [[ "${LAYERS}" != "7 8" ]]; then
-        echo "INFO: DinoV3 backbone detected. Overriding LAYERS to '7 8'."
-    fi
-    LAYERS="7 8"
-fi
+NUM_NN="${NUM_NN:-3}"
 
 if [[ "${BACKBONE}" == wideresnet50 ]]; then
-    if [[ "${LAYERS}" != "layer2 layer3" ]]; then
-        echo "INFO: WideResNet50 backbone detected. Overriding LAYERS to 'layer2 layer3', PRETRAIN_DIM/TARGET_DIM to 1024."
-    fi
-    LAYERS="layer2 layer3"
     PRETRAIN_DIM=1024
     TARGET_DIM=1024
 fi
@@ -64,9 +53,16 @@ echo "Results base:     ${RESULTS_BASE}"
 echo "GPU:              ${GPU_ID}"
 echo "Seed:             ${SEED}"
 echo "Image size:       ${IMAGE_SIZE}"
+echo "Resize:           ${RESIZE}"
 echo "Backbone:         ${BACKBONE}"
 echo "Layers:           ${LAYERS}"
 echo "Coreset %:        ${CORESET_PERCENTAGE}"
+echo "Pretrain dim:     ${PRETRAIN_DIM}"
+echo "Target dim:       ${TARGET_DIM}"
+echo "Patch size:       ${PATCH_SIZE}"
+echo "Num NN:           ${NUM_NN}"
+echo "Log group:        ${LOG_GROUP}"
+echo "Log project:      ${LOG_PROJECT}"
 echo "============================================"
 
 if [ ! -d "${DATASET_PATH}" ]; then
