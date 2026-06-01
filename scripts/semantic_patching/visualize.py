@@ -47,7 +47,7 @@ from src.backbones.dinov3 import DinoV3Backbone
 from src.clustering.hdbscan_clusterer import HDBSCANClusterer
 from src.masking.sam2_masker import SAM2Masker
 from src.synthesis.patch_composer import PatchComposer
-from src.synthesis.perlin_island import PerlinIslandGenerator
+from src.synthesis.perlin_island import GammaSizeParams, PerlinIslandGenerator
 from src.synthesis.random_composer import DTD_ROOT, RandomPatchComposer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -399,7 +399,15 @@ def main():
         umap_min_dist=0.0,
     )
 
-    island_gen = PerlinIslandGenerator(seed=args.seed)
+    island_gen = PerlinIslandGenerator(
+        size_params=GammaSizeParams(shape=1.5, scale=0.10, min_ratio=0.03, max_ratio=0.25),
+        noise_octaves=4,
+        noise_persistence=0.5,
+        noise_lacunarity=2.0,
+        noise_base_res=(8, 8),
+        sea_level_range=(0.05, 0.25),
+        seed=args.seed,
+    )
     composer = PatchComposer(
         island_generator=island_gen,
         seed=args.seed,

@@ -6,7 +6,7 @@ island mask and the intensity heatmap.
 
 Usage:
     uv run python scripts/perlin_island/visualize_islands.py
-    uv run python scripts/perlin_island/visualize_islands.py --dataset-root /path/to/dataset --samples-per-category 6 --output output/perlin_islands.png
+    uv run python scripts/perlin_island/visualize_islands.py --fill-strategy dtd --dtd-root /path/to/dtd/images
 """
 
 import argparse
@@ -21,6 +21,7 @@ from PIL import Image
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
+from synthesis.fillers import DTDTextureFiller
 from synthesis.perlin_island import GammaSizeParams, PerlinIslandGenerator
 
 DATASET_ROOT = os.path.join(
@@ -29,6 +30,14 @@ DATASET_ROOT = os.path.join(
     "..",
     "dataset",
     "glitch_hunt_mvtec",
+)
+DTD_ROOT_DEFAULT = os.path.join(
+    PROJECT_ROOT,
+    "..",
+    "..",
+    "dataset",
+    "dtd",
+    "images",
 )
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output", "perlin_islands")
 
@@ -47,7 +56,6 @@ MAX_CATEGORIES = 10
 
 
 def discover_categories(dataset_root: str) -> list[str]:
-    """Discover categories from the dataset directory structure."""
     categories = []
     if not os.path.isdir(dataset_root):
         print(f"Dataset root not found: {dataset_root}")
@@ -68,7 +76,6 @@ def discover_categories(dataset_root: str) -> list[str]:
 
 
 def get_sample_images(dataset_root: str, category: str, n_samples: int) -> list[np.ndarray]:
-    """Load random sample images from a category's good folder."""
     good_dir = os.path.join(dataset_root, category, "good")
     if not os.path.exists(good_dir):
         return []
@@ -89,7 +96,6 @@ def get_sample_images(dataset_root: str, category: str, n_samples: int) -> list[
 
 
 def crop_bounds_from_mask(mask: np.ndarray, pad_ratio: float = 0.2) -> tuple[int, int, int, int]:
-    """Return padded crop bounds around mask; fallback to center crop."""
     ys, xs = np.where(mask > 0)
     h, w = mask.shape
 
@@ -125,12 +131,57 @@ def source_image_pool(dataset_root: str, categories: list[str], per_category: in
     return pool
 
 
+def compose_island_with_fill(
+    img: np.ndarray,
+    result,
+    filler,
+) -> np.ndarray:
+    overlay = img.copy().astype(np.float64)
+    mask_bool = result.mask > 0
+
+    if not mask_bool.any():
+        return overlay.astype(np.uint8)
+
+    bounds = crop_bounds_from_mask(result.mask)
+    mask_crop = crop_region(result.mask, bounds)
+    intensity_crop = crop_region(result.intensity, bounds)
+
+    dummy_source = np.zeros(img.shape[:2], dtype=bool)
+    fill_patch = filler.fill(img, mask_crop, dummy_source)
+
+    ih, iw = fill_patch.shape[:2]
+    intensity_3ch = np.stack([intensity_crop] * 3, axis=-1)
+
+    y0, y1, x0, x1 = bounds
+    roi_h = min(ih, y1 - y0)
+    roi_w = min(iw, x1 - x0)
+
+    if roi_h > 0 and roi_w > 0:
+        overlay[y0:y0+roi_h, x0:x0+roi_w] = (
+            overlay[y0:y0+roi_h, x0:x0+roi_w] * (1.0 - intensity_3ch[:roi_h, :roi_w])
+            + fill_patch[:roi_h, :roi_w].astype(np.float64) * intensity_3ch[:roi_h, :roi_w]
+        )
+
+    return np.clip(overlay, 0, 255).astype(np.uint8)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Visualize Perlin noise islands")
     parser.add_argument(
         "--dataset-root",
         default=DATASET_ROOT,
         help="Path to MVTec dataset root",
+    )
+    parser.add_argument(
+        "--dtd-root",
+        default=DTD_ROOT_DEFAULT,
+        help="Path to DTD images directory (used when --fill-strategy=dtd)",
+    )
+    parser.add_argument(
+        "--fill-strategy",
+        choices=["noise", "dtd"],
+        default="dtd",
+        help="Fill strategy: 'dtd' composes DTD textures (default), 'noise' uses intensity colormap overlay",
     )
     parser.add_argument(
         "--samples-per-category",
@@ -170,7 +221,7 @@ def main():
     print(f"Found {len(categories)} categories (limited to {args.max_categories})")
 
     generator = PerlinIslandGenerator(
-        size_params=GammaSizeParams(shape=1.2, scale=0.22, min_ratio=0.04, max_ratio=0.25),
+        size_params=GammaSizeParams(shape=1.5, scale=0.10, min_ratio=0.03, max_ratio=0.25),
         noise_octaves=4,
         noise_persistence=0.5,
         noise_lacunarity=2.0,
@@ -179,7 +230,12 @@ def main():
         seed=args.seed,
     )
 
-    # Reuse the same params for the distribution plot so the histogram matches reality.
+    filler = None
+    if args.fill_strategy == "dtd":
+        print(f"Loading DTD textures from {args.dtd_root}...")
+        filler = DTDTextureFiller(args.dtd_root, seed=args.seed)
+        print(f"  Loaded {len(filler._texture_paths)} textures")
+
     stats_params = generator.size_params
 
     n_cols = args.islands_per_sample + 1
@@ -209,17 +265,22 @@ def main():
 
                 result = generator(h, w, mask=None)
 
-                overlay = img.copy().astype(np.float64)
-                mask_bool = result.mask > 0
+                if filler is not None:
+                    overlay = compose_island_with_fill(img, result, filler)
+                else:
+                    overlay = img.copy().astype(np.float64)
+                    mask_bool = result.mask > 0
 
-                if mask_bool.any():
-                    cmap = plt.get_cmap("hot")
-                    colored = cmap(result.intensity)[..., :3]
-                    colored = (colored * 255).astype(np.float64)
+                    if mask_bool.any():
+                        cmap = plt.get_cmap("hot")
+                        colored = cmap(result.intensity)[..., :3]
+                        colored = (colored * 255).astype(np.float64)
 
-                    alpha = 0.65 * result.intensity[..., np.newaxis]
-                    overlay = overlay * (1 - alpha) + colored * alpha
-                    overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+                        alpha = 0.65 * result.intensity[..., np.newaxis]
+                        overlay = overlay * (1 - alpha) + colored * alpha
+                        overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+                    else:
+                        overlay = overlay.astype(np.uint8)
 
                 ax.imshow(overlay)
 
@@ -233,8 +294,9 @@ def main():
 
             row_idx += 1
 
+    fill_label = args.fill_strategy.upper() if args.fill_strategy == "dtd" else "Noise Intensity"
     fig.suptitle(
-        "Perlin Noise Island Generator — Synthetic Anomaly Masks",
+        f"Perlin Noise Island Generator — {fill_label} Fill",
         fontsize=13,
         fontweight="bold",
         y=0.995,
@@ -253,7 +315,6 @@ def main():
     areas = []
     grad_counts = {gt: 0 for gt in GRADIENT_TYPES}
 
-    # Fast analytic sampling: distribution does not require full image synthesis.
     stats_rng = random.Random(args.seed + 100)
     total_area = 224 * 224
 
@@ -340,7 +401,7 @@ def main():
 
         for col_idx, grad_type in enumerate(GRADIENT_TYPES):
             type_gen = PerlinIslandGenerator(
-                size_params=GammaSizeParams(shape=1.2, scale=0.22, min_ratio=0.04, max_ratio=0.50),
+                size_params=GammaSizeParams(shape=1.5, scale=0.10, min_ratio=0.03, max_ratio=0.25),
                 noise_octaves=4,
                 noise_persistence=0.5,
                 noise_lacunarity=2.0,
@@ -358,8 +419,13 @@ def main():
                 src_crop = crop_region(src, bounds)
                 mask_crop = crop_region(result.mask, bounds)
 
-                island_fill = np.zeros_like(src_crop, dtype=np.uint8)
-                island_fill[mask_crop > 0] = src_crop[mask_crop > 0]
+                if filler is not None:
+                    dummy_source = np.zeros(src.shape[:2], dtype=bool)
+                    island_fill = filler.fill(src, mask_crop, dummy_source)
+                    island_fill[mask_crop == 0] = 0
+                else:
+                    island_fill = np.zeros_like(src_crop, dtype=np.uint8)
+                    island_fill[mask_crop > 0] = src_crop[mask_crop > 0]
 
                 ax = axes4[row_idx, col_idx]
                 ax.imshow(island_fill)
@@ -367,7 +433,8 @@ def main():
                     ax.set_title(f"{grad_type}\n{result.area_ratio*100:.1f}%", fontsize=9, fontweight="bold")
                 ax.axis("off")
 
-        fig4.suptitle("Island Fill Showcase — Cropped Fill Inside Mask", fontsize=12, fontweight="bold")
+        fill_label = "DTD Texture" if filler is not None else "Source Crop"
+        fig4.suptitle(f"Island Fill Showcase — {fill_label} Inside Mask", fontsize=12, fontweight="bold")
         plt.tight_layout()
         fill_path = args.output.replace(".jpg", "_showcase_fill.jpg").replace(
             ".jpeg", "_showcase_fill.jpeg"
