@@ -7,14 +7,14 @@ set -euo pipefail
 # =============================================================================
 
 # Configurable paths
-MODEL_ROOT="${MODEL_ROOT:-results/IM224_MVTEC_BENCH_dinov3_vitl_L7-8_P0.1_D1024-1024_PS-3_AN-1_S0_0}"
+MODEL_ROOT="${MODEL_ROOT:-results/IM384_MVTEC_BENCH_dinov3_vitl_L8-12-6_P0.1_D1024-1024_PS-3_AN-9_S0}"
 EVAL_DATASET_PATH="${EVAL_DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/mvtec_small}"
 
 # Evaluation configuration
 GPU_ID="${GPU_ID:-0}"
 SEED="${SEED:-0}"
-IMAGE_SIZE="${IMAGE_SIZE:-224}"
-RESIZE="${RESIZE:-256}"
+IMAGE_SIZE="${IMAGE_SIZE:-384}"
+RESIZE="${RESIZE:-384}"
 EVAL_LOG_GROUP="${EVAL_LOG_GROUP:-CrossEval_$(date +%Y%m%d_%H%M%S)}"
 EVAL_LOG_PROJECT="${EVAL_LOG_PROJECT:-CrossEval_Results}"
 

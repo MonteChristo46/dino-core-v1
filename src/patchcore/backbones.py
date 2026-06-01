@@ -64,7 +64,7 @@ def _resolve_torchvision_weights(name):
 
 
 _DINOV3_WEIGHTS_DIRS = {
-    "dinov3": "weights/dinov3",
+    "dinov3_vits": "weights/dinov3_vits",
     "dinov3_vitb": "weights/dinov3_vitb",
     "dinov3_vitl": "weights/dinov3_vitl",
     "dinov3_vithplus": "weights/dinov3_vithplus",

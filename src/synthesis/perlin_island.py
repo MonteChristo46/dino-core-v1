@@ -15,7 +15,61 @@ from .shape_priors import GRADIENT_TYPES, build_shape_prior
 
 @dataclass
 class GammaSizeParams:
-    """Gamma parameters for island area sampling."""
+    """Gamma distribution parameters for sampling synthetic anomaly island area.
+
+    The island area is sampled from a Gamma distribution, then converted to pixel
+    count and clamped by min_ratio / max_ratio. The Gamma distribution is ideal
+    because it is bounded at zero and right-skewed — most islands are small with
+    occasional larger ones — and both the shape and scale are independently tunable.
+
+    Sampling formula (see ``_sample_area``)::
+
+        raw_sample = gammavariate(shape, scale)   # mean = shape * scale
+        target_pixels = int(raw_sample * total_image_area)
+        result = clamp(target_pixels, min_pixels, max_pixels)
+
+    Attributes:
+        shape: Gamma shape parameter (alpha). Controls the *consistency* of island
+            sizes. At ~1.0 the distribution is exponential (heavy right tail).
+            Higher values make it more bell-shaped and centered around the mean.
+
+            - Increase (e.g. 2.0+): islands become more uniform in size, less
+              variance, predictable mean.
+            - Decrease (e.g. 0.5-0.8): high variance — many tiny islands mixed
+              with occasional very large ones. At < 1.0 the distribution is
+              heavily skewed toward zero.
+
+        scale: Gamma scale parameter (theta). Controls the *average size* of
+            islands as a fraction of total image area (mean = shape * scale).
+
+            - Increase (e.g. 0.20): larger islands on average. Mean raw sample
+              rises proportionally.
+            - Decrease (e.g. 0.06): smaller islands on average.
+
+        min_ratio: Hard floor — the island will never be smaller than this
+            fraction of the total image pixel count, regardless of the Gamma
+            sample.
+
+            - Increase (e.g. 0.10): prevents tiny islands entirely.
+            - Decrease (e.g. 0.01): allows very small defects like pinpricks.
+
+        max_ratio: Hard ceiling — the island will never exceed this fraction of
+            the *mask area* (not total image), regardless of the Gamma sample.
+
+            - Increase (e.g. 0.70): allows large defects covering most of the
+              masked object.
+            - Decrease (e.g. 0.15): constrains islands to be small relative to
+              the object.
+
+    Practical tuning examples:
+
+    - Stains / spots (small localized): shape=0.8, scale=0.06, min_ratio=0.01,
+      max_ratio=0.15
+    - Scratches / lines (medium elongated): shape=1.0, scale=0.10,
+      min_ratio=0.03, max_ratio=0.25
+    - Large discolorations (broad regions): shape=1.5, scale=0.20,
+      min_ratio=0.08, max_ratio=0.50
+    """
 
     shape: float = 1.1
     scale: float = 0.14
@@ -60,7 +114,7 @@ class PerlinIslandGenerator:
         self.noise_base_res = noise_base_res
         self.gradient_types = gradient_types or GRADIENT_TYPES
         self.sea_level_range = sea_level_range
-        self.device = device or torch.device("cpu")
+        self.device = device or torch.device("cpu") # TODO just select GPU if available.
         self._rng = random.Random(seed)
 
     def _sample_center(
