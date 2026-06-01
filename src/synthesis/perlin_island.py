@@ -114,7 +114,7 @@ class PerlinIslandGenerator:
         self.noise_base_res = noise_base_res
         self.gradient_types = gradient_types or GRADIENT_TYPES
         self.sea_level_range = sea_level_range
-        self.device = device or torch.device("cpu") # TODO just select GPU if available.
+        self.device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._rng = random.Random(seed)
 
     def _sample_center(

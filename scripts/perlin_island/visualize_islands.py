@@ -170,7 +170,7 @@ def main():
     print(f"Found {len(categories)} categories (limited to {args.max_categories})")
 
     generator = PerlinIslandGenerator(
-        size_params=GammaSizeParams(shape=1.2, scale=0.22, min_ratio=0.04, max_ratio=0.50),
+        size_params=GammaSizeParams(shape=1.2, scale=0.22, min_ratio=0.04, max_ratio=0.25),
         noise_octaves=4,
         noise_persistence=0.5,
         noise_lacunarity=2.0,
@@ -178,6 +178,9 @@ def main():
         sea_level_range=(0.05, 0.25),
         seed=args.seed,
     )
+
+    # Reuse the same params for the distribution plot so the histogram matches reality.
+    stats_params = generator.size_params
 
     n_cols = args.islands_per_sample + 1
     n_rows = len(categories) * args.samples_per_category
@@ -252,7 +255,6 @@ def main():
 
     # Fast analytic sampling: distribution does not require full image synthesis.
     stats_rng = random.Random(args.seed + 100)
-    stats_params = GammaSizeParams(shape=1.2, scale=0.22, min_ratio=0.04, max_ratio=0.50)
     total_area = 224 * 224
 
     min_pixels = max(4, int(total_area * stats_params.min_ratio))
