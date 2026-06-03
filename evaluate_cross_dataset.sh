@@ -7,7 +7,7 @@ set -euo pipefail
 # =============================================================================
 
 # Configurable paths
-MODEL_ROOT="${MODEL_ROOT:-results/IM384_MVTEC_BENCH_dinov3_vitl_L8-12-6_P0.1_D1024-1024_PS-3_AN-9_S0}"
+MODEL_ROOT="${MODEL_ROOT:-results/IM384_SAv2_dinov3_vithplus_L4-12-20_P0.1_D1280-1280_PS-3_AN-7_S0}"
 EVAL_DATASET_PATH="${EVAL_DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/mvtec_small}"
 
 # Evaluation configuration

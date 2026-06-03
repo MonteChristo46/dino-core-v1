@@ -6,20 +6,20 @@ set -euo pipefail
 # =============================================================================
 
 # Configurable dataset path (MVTec AD format)
-DATASET_PATH="${DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/semantic_synthetic_anomalies}"
+DATASET_PATH="${DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/semantic_synthetic_anomalies_v2}"
 
 # Training configuration
 GPU_ID="${GPU_ID:-0}"
 SEED="${SEED:-0}"
 IMAGE_SIZE="${IMAGE_SIZE:-384}"
 RESIZE="${RESIZE:-384}"
-BACKBONE="${BACKBONE:-dinov3_vitb}"
-LAYERS="${LAYERS:-4 12}"
+BACKBONE="${BACKBONE:-dinov3_vithplus}"
+LAYERS="${LAYERS:-4 12 20}"
 CORESET_PERCENTAGE="${CORESET_PERCENTAGE:-0.1}"
-PRETRAIN_DIM="${PRETRAIN_DIM:-768}"
-TARGET_DIM="${TARGET_DIM:-768}"
-PATCH_SIZE="${PATCH_SIZE:-1}"
-NUM_NN="${NUM_NN:-9}"
+PRETRAIN_DIM="${PRETRAIN_DIM:-1280}"
+TARGET_DIM="${TARGET_DIM:-1280}"
+PATCH_SIZE="${PATCH_SIZE:-3}"
+NUM_NN="${NUM_NN:-7}"
 
 if [[ "${BACKBONE}" == wideresnet50 ]]; then
     PRETRAIN_DIM=1024

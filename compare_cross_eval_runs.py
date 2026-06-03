@@ -4,7 +4,7 @@ PatchCore Cross-Evaluation Run Comparison Script
 
 Takes multiple cross-eval run directories and generates comparison plots
 across all runs: threshold delta, AUROC transfer, threshold scatter,
-precision heatmap, and delta boxplot.
+precision heatmap, recall heatmap, F1 heatmap, and delta boxplot.
 """
 
 import argparse
@@ -78,12 +78,29 @@ def compute_figsize(n_categories, max_label_len, bar_groups=2):
 
 
 def short_model_name(full_name):
+    full_name = full_name.replace("__", "_")
     parts = full_name.split("_")
-    for p in parts:
-        if p.lower() in ("dino", "dinov3", "dinov2", "wideresnet", "resnet"):
-            idx = parts.index(p)
-            return "_".join(parts[idx:idx+3])
-    return full_name[:30]
+    dataset_prefix = parts[0]
+    dataset_name = None
+    dino_part = None
+    dims_part = None
+    for idx, p in enumerate(parts):
+        if p.lower().startswith("dinov") or p.lower() == "dino":
+            dino_part = "_".join(parts[idx:idx+2])
+            if idx > 1:
+                dataset_name = parts[idx - 1]
+        if p.upper().startswith("D") and "-" in p and len(p) < 20:
+            dims_part = p
+    tokens = [dataset_prefix]
+    if dataset_name:
+        tokens.append(dataset_name)
+    if dino_part:
+        tokens.append(dino_part)
+    if dims_part:
+        tokens.append(dims_part)
+    if len(tokens) > 1:
+        return "_".join(tokens)
+    return full_name[:40]
 
 
 def load_run_data(run_dir):
@@ -132,6 +149,10 @@ def load_run_data(run_dir):
         "anomaly_pixel_auroc": np.array(anomaly_pixel_auroc),
         "precision": np.array(precision),
         "recall": np.array(recall),
+        "f1": np.array([
+            2 * p * r / (p + r) if (p + r) > 0 else 0.0
+            for p, r in zip(precision, recall)
+        ]),
     }
 
 
@@ -312,6 +333,10 @@ def plot_recall_heatmap(run_data_list, categories, output_dir):
     _plot_metric_heatmap(run_data_list, categories, "recall", "Recall", output_dir, "recall_heatmap")
 
 
+def plot_f1_heatmap(run_data_list, categories, output_dir):
+    _plot_metric_heatmap(run_data_list, categories, "f1", "F1 Score", output_dir, "f1_heatmap")
+
+
 def plot_delta_boxplot(run_data_list, output_dir):
     fig, ax = plt.subplots(1, 1, figsize=(7, 5))
 
@@ -376,6 +401,7 @@ def main():
     plot_threshold_scatter(run_data_list, output_dir)
     plot_precision_heatmap(run_data_list, categories, output_dir)
     plot_recall_heatmap(run_data_list, categories, output_dir)
+    plot_f1_heatmap(run_data_list, categories, output_dir)
     plot_delta_boxplot(run_data_list, output_dir)
 
     LOGGER.info(f"All comparison plots saved to {output_dir}")

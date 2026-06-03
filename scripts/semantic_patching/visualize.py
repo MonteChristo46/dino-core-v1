@@ -48,6 +48,7 @@ from src.clustering.hdbscan_clusterer import HDBSCANClusterer
 from src.masking.sam2_masker import SAM2Masker
 from src.synthesis.patch_composer import PatchComposer
 from src.synthesis.perlin_island import GammaSizeParams, PerlinIslandGenerator
+from src.synthesis.fillers import DTDTextureFiller, SourceTextureFiller
 from src.synthesis.random_composer import DTD_ROOT, RandomPatchComposer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -88,8 +89,7 @@ def extract_dino_features(
     from torchvision import transforms
 
     preprocess = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
+        transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -365,6 +365,10 @@ def main():
     parser.add_argument("--dinov3-size", default="vitl",
                         choices=["vits", "vitsplus", "vitb", "vitl", "vithplus"])
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--fill-strategy", choices=["source", "dtd"], default="dtd",
+                        help="Fill strategy for Perlin island (default: dtd)")
+    parser.add_argument("--dtd-root", default=DTD_ROOT,
+                        help="Path to DTD images directory (used when --fill-strategy=dtd)")
     args = parser.parse_args()
 
     categories = args.categories if args.categories else ALL_CATEGORIES
@@ -408,8 +412,12 @@ def main():
         sea_level_range=(0.05, 0.25),
         seed=args.seed,
     )
+
+    filler = DTDTextureFiller(args.dtd_root, seed=args.seed) if args.fill_strategy == "dtd" else SourceTextureFiller()
+
     composer = PatchComposer(
         island_generator=island_gen,
+        filler=filler,
         seed=args.seed,
     )
     random_composer = RandomPatchComposer(
@@ -580,8 +588,8 @@ def main():
                 "stats": patch_stats,
             })
 
-        out_path = os.path.join(cat_output, f"{Path(image_path).stem}.png")
-        fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.1)
+        out_path = os.path.join(cat_output, f"{Path(image_path).stem}.jpg")
+        fig.savefig(out_path, dpi=150, bbox_inches="tight", pad_inches=0.1, format="jpeg")
         plt.close(fig)
         LOGGER.info(f"  Saved: {out_path}")
 
@@ -694,8 +702,8 @@ def main():
         fig.suptitle("Semantic Patching — Summary", fontsize=14, fontweight="bold", y=1.01)
         fig.tight_layout()
 
-        summary_path = os.path.join(args.output_dir, "summary.png")
-        fig.savefig(summary_path, dpi=150, bbox_inches="tight", pad_inches=0.1)
+        summary_path = os.path.join(args.output_dir, "summary.jpg")
+        fig.savefig(summary_path, dpi=150, bbox_inches="tight", pad_inches=0.1, format="jpeg")
         plt.close(fig)
         LOGGER.info(f"Summary saved: {summary_path}")
 

@@ -3,7 +3,7 @@ import transformers
 import os
 
 class DinoV3Backbone(nn.Module):
-    def __init__(self, weights_dir="weights/dinov3"):
+    def __init__(self, weights_dir="weights/dinov3_vits"):
         super().__init__()
         if not os.path.exists(weights_dir):
             raise FileNotFoundError(f"DINOv3 weights not found at {weights_dir}. Please run scripts/download_backbone.py first.")

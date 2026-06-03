@@ -33,25 +33,21 @@ from src.backbones.dinov3 import DinoV3Backbone
 from src.clustering.hdbscan_clusterer import HDBSCANClusterer
 from src.masking.sam2_masker import SAM2Masker
 from src.synthesis.patch_composer import PatchComposer
-from src.synthesis.perlin_island import PerlinIslandGenerator
+from src.synthesis.perlin_island import GammaSizeParams, PerlinIslandGenerator
+from src.synthesis.fillers import DTDTextureFiller, SourceTextureFiller
 from src.synthesis.random_composer import DTD_ROOT, RandomPatchComposer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 LOGGER = logging.getLogger(__name__)
 
 DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "mvtec_small")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "semantic_synthetic_anomalies_visa")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "semantic_synthetic_anomalies_v3")
 
 ALL_CATEGORIES = [
     "bottle", "cable", "capsule", "carpet", "grid",
     "hazelnut", "leather", "metal_nut", "pill", "screw",
     "tile", "toothbrush", "transistor", "wood", "zipper",
 ]
-
-#ALL_CATEGORIES = [
-#    "screw",
-#    "tile", "toothbrush", "transistor", "wood", "zipper",
-#]
 
 def collect_images(directory: str) -> list[str]:
     if not os.path.isdir(directory):
@@ -71,9 +67,9 @@ def extract_dino_features_batch(
     from torchvision import transforms
 
     t0 = time.time()
+
     preprocess = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
+        transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -118,14 +114,18 @@ def main():
     parser.add_argument("--sam2-model-size", default="small",
                         choices=["tiny", "small", "base_plus", "large"])
     parser.add_argument("--sam2-min-area-ratio", type=float, default=0.02)
-    parser.add_argument("--sam2-max-area-ratio", type=float, default=0.35)
+    parser.add_argument("--sam2-max-area-ratio", type=float, default=0.50)
     parser.add_argument("--sam2-pred-iou", type=float, default=0.88)
     parser.add_argument("--sam2-stability", type=float, default=0.95)
-    parser.add_argument("--dinov3-size", default="vithplus",
+    parser.add_argument("--dinov3-size", default="vitl",
                         choices=["vits", "vitsplus", "vitb", "vitl", "vithplus"])
     parser.add_argument("--batch-size", type=int, default=64,
                         help="Batch size for DINOv3 feature extraction (default: 64)")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--fill-strategy", choices=["source", "dtd"], default="dtd",
+                        help="Fill strategy for Perlin island (default: dtd)")
+    parser.add_argument("--dtd-root", default=DTD_ROOT,
+                        help="Path to DTD images directory (used when --fill-strategy=dtd)")
     args = parser.parse_args()
 
     categories = args.categories if args.categories else ALL_CATEGORIES
@@ -163,6 +163,10 @@ def main():
     LOGGER.info(f"  SAM2 stability: {args.sam2_stability}")
     LOGGER.info(f"  SAM2 area ratio: [{args.sam2_min_area_ratio}, {args.sam2_max_area_ratio}]")
     LOGGER.info(f"  num_test per category: {args.num_test} (good={num_good}, bad={num_bad})")
+    LOGGER.info(f"  fill_strategy: {args.fill_strategy}")
+    LOGGER.info(f"  Perlin: shape=1.5, scale=0.10, min_ratio=0.03, max_ratio=0.25")
+    LOGGER.info(f"  Perlin: octaves=4, persistence=0.5, lacunarity=2.0, base_res=(8,8)")
+    LOGGER.info(f"  Perlin: sea_level_range=(0.05, 0.25)")
     LOGGER.info(f"  seed: {args.seed}")
     LOGGER.info("=" * 60)
     LOGGER.info("")
@@ -177,9 +181,21 @@ def main():
         umap_min_dist=0.0,
     )
 
-    island_gen = PerlinIslandGenerator(seed=args.seed)
+    island_gen = PerlinIslandGenerator(
+        size_params=GammaSizeParams(shape=1.5, scale=0.10, min_ratio=0.03, max_ratio=0.25),
+        noise_octaves=4,
+        noise_persistence=0.5,
+        noise_lacunarity=2.0,
+        noise_base_res=(8, 8),
+        sea_level_range=(0.05, 0.25),
+        seed=args.seed,
+    )
+
+    filler = DTDTextureFiller(args.dtd_root, seed=args.seed) if args.fill_strategy == "dtd" else SourceTextureFiller()
+
     composer = PatchComposer(
         island_generator=island_gen,
+        filler=filler,
         seed=args.seed,
     )
     random_composer = RandomPatchComposer(

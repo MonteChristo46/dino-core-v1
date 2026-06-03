@@ -2,8 +2,7 @@
 
 Allows multiple augmentors to be registered in priority order. Each strategy
 declares whether it can handle a given image, and the chain executes the first
-matching strategy. This eliminates hardcoded fallback logic (e.g., IslandPaster
-delegating to TexturePaster based on mask area ratio).
+matching strategy.
 
 Usage:
     chain = AugmentationChain([
