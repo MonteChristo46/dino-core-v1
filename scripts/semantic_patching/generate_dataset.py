@@ -19,9 +19,12 @@ import os
 import shutil
 import time
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from typing import List
 
 import numpy as np
 from PIL import Image
+import torch
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
@@ -41,11 +44,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 LOGGER = logging.getLogger(__name__)
 
 DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "mvtec_small")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "semantic_synthetic_anomalies_v3")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "semantic_synthetic_anomalies")
 
 ALL_CATEGORIES = [
    "cable"
 ]
+
+MIN_COVERAGE_THRESHOLD = 0.05
 
 def collect_images(directory: str) -> list[str]:
     if not os.path.isdir(directory):
@@ -55,6 +60,11 @@ def collect_images(directory: str) -> list[str]:
         for f in os.listdir(directory)
         if f.lower().endswith((".png", ".jpg", ".jpeg"))
     )
+
+
+def _load_image(path: str) -> tuple[Image.Image, np.ndarray]:
+    pil = Image.open(path).convert("RGB")
+    return pil, np.array(pil)
 
 
 def main():
@@ -82,6 +92,10 @@ def main():
                         help="Fill strategy for Perlin island (default: dtd)")
     parser.add_argument("--dtd-root", default=DTD_ROOT,
                         help="Path to DTD images directory (used when --fill-strategy=dtd)")
+    parser.add_argument("--io-workers", type=int, default=4,
+                        help="Number of threads for async image I/O (default: 4)")
+    parser.add_argument("--prefetch", type=int, default=8,
+                        help="Number of images to prefetch ahead of SAM2 (default: 8)")
     args = parser.parse_args()
 
     categories = args.categories if args.categories else ALL_CATEGORIES
@@ -146,7 +160,7 @@ def main():
         composer=patch_composer,
         random_composer=random_composer,
         device=args.device,
-        min_coverage=0.05,
+        min_coverage=MIN_COVERAGE_THRESHOLD,
         min_clusters=2,
     )
     random_strategy = RandomPatchStrategy(composer=random_composer)
@@ -171,6 +185,8 @@ def main():
     LOGGER.info(f"  Perlin: sea_level_range=(0.05, 0.25)")
     LOGGER.info(f"  seed: {args.seed}")
     LOGGER.info(f"  Augmentation chain: {chain}")
+    LOGGER.info(f"  Early routing threshold: coverage < {MIN_COVERAGE_THRESHOLD} -> random only (skip DINO)")
+    LOGGER.info(f"  IO workers: {args.io_workers}, Prefetch: {args.prefetch}")
     LOGGER.info("=" * 60)
     LOGGER.info("")
 
@@ -222,21 +238,56 @@ def main():
 
         sam2_count = 0
         batch_buffer = []
+        write_futures: List = []
+
+        io_executor = ThreadPoolExecutor(max_workers=args.io_workers, thread_name_prefix="writer")
+        prefetch_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="prefetch")
+
+        def _save_result(idx: int, augmented_img: np.ndarray, anomaly_mask: np.ndarray) -> None:
+            idx_str = f"{idx:03d}"
+            img_out = os.path.join(test_bad_dir, f"{idx_str}.png")
+            mask_out = os.path.join(gt_bad_dir, f"{idx_str}_mask.png")
+            Image.fromarray(augmented_img).save(img_out)
+            mask_uint8 = (anomaly_mask > 0).astype(np.uint8) * 255
+            Image.fromarray(mask_uint8, mode="L").save(mask_out)
 
         def _process_batch(buffer: list[dict]) -> None:
             nonlocal bad_idx, valid_count, no_valid_count, fail_count
 
             batch_start = time.time()
-            images_np = [item["image_np"] for item in buffer]
-            per_image_kwargs = [
-                {"sam2_mask": item["merged_mask"], "coverage": item["coverage"]}
-                for item in buffer
-            ]
 
-            results = chain.process_batch(images_np, per_image_kwargs, return_debug=True)
+            semantic_eligible = [item for item in buffer if item["coverage"] >= MIN_COVERAGE_THRESHOLD]
+            random_only = [item for item in buffer if item["coverage"] < MIN_COVERAGE_THRESHOLD]
+
+            results_map: dict[int, tuple] = {}
+
+            if semantic_eligible:
+                images_np = [item["image_np"] for item in semantic_eligible]
+                per_image_kwargs = [
+                    {"sam2_mask": item["merged_mask"], "coverage": item["coverage"]}
+                    for item in semantic_eligible
+                ]
+                with torch.inference_mode():
+                    semantic_results = chain.process_batch(images_np, per_image_kwargs, return_debug=True)
+                for i, result in enumerate(semantic_results):
+                    results_map[id(semantic_eligible[i])] = result
+
+            if random_only:
+                images_np = [item["image_np"] for item in random_only]
+                per_image_kwargs = [{} for _ in random_only]
+                with torch.inference_mode():
+                    random_results = random_strategy.process_batch(images_np, per_image_kwargs, return_debug=True)
+                for i, result in enumerate(random_results):
+                    results_map[id(random_only[i])] = result
 
             batch_saved = 0
-            for item, (augmented_img, anchor_crop, anomaly_mask, debug_info) in zip(buffer, results):
+            for item in buffer:
+                result = results_map.get(id(item))
+                if result is None:
+                    fail_count += 1
+                    continue
+
+                augmented_img, anchor_crop, anomaly_mask, debug_info = result
                 strategy_name = debug_info.get("strategy", "unknown") if debug_info else "unknown"
                 succeeded = debug_info.get("success", False) if debug_info else False
 
@@ -253,30 +304,33 @@ def main():
                     fail_count += 1
                     continue
 
-                idx_str = f"{bad_idx:03d}"
-                img_out = os.path.join(test_bad_dir, f"{idx_str}.png")
-                mask_out = os.path.join(gt_bad_dir, f"{idx_str}_mask.png")
-
-                Image.fromarray(augmented_img).save(img_out)
-
-                mask_uint8 = (anomaly_mask > 0).astype(np.uint8) * 255
-                Image.fromarray(mask_uint8, mode="L").save(mask_out)
-
+                write_futures.append(io_executor.submit(_save_result, bad_idx, augmented_img, anomaly_mask))
                 bad_idx += 1
                 batch_saved += 1
 
             LOGGER.info(
                 f"    Batch done: {len(buffer)} images processed, "
                 f"{batch_saved} saved, "
+                f"semantic={len(semantic_eligible)}, random_only={len(random_only)}, "
                 f"time={time.time() - batch_start:.3f}s"
             )
 
+        prefetch_queue: list = []
+        for future in prefetch_executor.map(_load_image, source_images[:args.prefetch]):
+            prefetch_queue.append(future)
+
         while bad_idx < num_bad and src_idx < len(source_images) * 3:
-            img_path = source_images[src_idx % len(source_images)]
+            if prefetch_queue:
+                image_pil, image_np = prefetch_queue.pop(0)
+            else:
+                img_path = source_images[src_idx % len(source_images)]
+                image_pil, image_np = _load_image(img_path)
             src_idx += 1
 
-            image_pil = Image.open(img_path).convert("RGB")
-            image_np = np.array(image_pil)
+            next_idx = src_idx % len(source_images)
+            if len(prefetch_queue) < args.prefetch:
+                next_path = source_images[next_idx]
+                prefetch_queue.append(prefetch_executor.submit(_load_image, next_path))
 
             merged_mask, _, stats = masker.get_mask_with_stats(image_np)
             coverage = stats.get("coverage", 0)
@@ -298,6 +352,12 @@ def main():
             LOGGER.info(f"  Final batch ({len(batch_buffer)} images), running pipeline...")
             _process_batch(batch_buffer)
             batch_buffer = []
+
+        for f in write_futures:
+            f.result()
+
+        io_executor.shutdown(wait=True)
+        prefetch_executor.shutdown(wait=True)
 
         LOGGER.info(f"  SAM2 calls: {sam2_count}")
         LOGGER.info(f"  Generated {bad_idx} test/bad images (VALID={valid_count}, NO_VALID={no_valid_count}, failed={fail_count})")
