@@ -130,7 +130,7 @@ class SAM2Masker(BaseMasker):
         model_size: str = "small",
         weights_dir: str = "weights/sam2",
         device: str = "cpu",
-        points_per_batch: int = 64,
+        points_per_batch: int = 128,
         pred_iou_thresh: float = 0.90,
         stability_score_thresh: float = 0.97,
         crop_n_layers: int = 0,

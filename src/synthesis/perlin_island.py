@@ -71,10 +71,11 @@ class GammaSizeParams:
       min_ratio=0.08, max_ratio=0.50
     """
 
-    shape: float = 1.1
-    scale: float = 1.5
-    min_ratio: float = 0.03
-    max_ratio: float = 0.15
+
+    shape: float = 1.5
+    scale: float = 0.01
+    min_ratio: float = 0.02
+    max_ratio: float = 0.035
     max_resample_attempts: int = 64
 
 

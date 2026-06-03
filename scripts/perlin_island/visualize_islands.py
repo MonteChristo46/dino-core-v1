@@ -221,7 +221,7 @@ def main():
     print(f"Found {len(categories)} categories (limited to {args.max_categories})")
 
     generator = PerlinIslandGenerator(
-        size_params=GammaSizeParams(shape=1.5, scale=0.07, min_ratio=0.03, max_ratio=0.15),
+        size_params=GammaSizeParams(),
         noise_octaves=4,
         noise_persistence=0.5,
         noise_lacunarity=2.0,

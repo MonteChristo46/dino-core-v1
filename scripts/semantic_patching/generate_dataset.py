@@ -44,9 +44,7 @@ DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "mvtec_small")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "semantic_synthetic_anomalies_v3")
 
 ALL_CATEGORIES = [
-    "bottle", "cable", "capsule", "carpet", "grid",
-    "hazelnut", "leather", "metal_nut", "pill", "screw",
-    "tile", "toothbrush", "transistor", "wood", "zipper",
+   "cable"
 ]
 
 def collect_images(directory: str) -> list[str]:
@@ -73,14 +71,14 @@ def main():
                         choices=["tiny", "small", "base_plus", "large"])
     parser.add_argument("--sam2-min-area-ratio", type=float, default=0.02)
     parser.add_argument("--sam2-max-area-ratio", type=float, default=0.50)
-    parser.add_argument("--sam2-pred-iou", type=float, default=0.88)
-    parser.add_argument("--sam2-stability", type=float, default=0.95)
+    parser.add_argument("--sam2-pred-iou", type=float, default=0.70)
+    parser.add_argument("--sam2-stability", type=float, default=0.80)
     parser.add_argument("--dinov3-size", default="vitl",
                         choices=["vits", "vitsplus", "vitb", "vitl", "vithplus"])
     parser.add_argument("--batch-size", type=int, default=64,
                         help="Batch size for DINOv3 feature extraction (default: 64)")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--fill-strategy", choices=["source", "dtd"], default="dtd",
+    parser.add_argument("--fill-strategy", choices=["source", "dtd"], default="source",
                         help="Fill strategy for Perlin island (default: dtd)")
     parser.add_argument("--dtd-root", default=DTD_ROOT,
                         help="Path to DTD images directory (used when --fill-strategy=dtd)")
@@ -100,7 +98,7 @@ def main():
         stability_score_thresh=args.sam2_stability,
         min_area_ratio=args.sam2_min_area_ratio,
         max_area_ratio=args.sam2_max_area_ratio,
-        fallback_stability_thresholds=[0.90, 0.85, 0.80],
+        fallback_stability_thresholds=[0.7],
     )
 
     dinov3_weights = os.path.join(PROJECT_ROOT, "weights", f"dinov3_{args.dinov3_size}")
@@ -120,7 +118,7 @@ def main():
     )
 
     island_gen = PerlinIslandGenerator(
-        size_params=GammaSizeParams(shape=1.5, scale=0.07, min_ratio=0.03, max_ratio=0.15),
+        size_params=GammaSizeParams(),
         noise_octaves=4,
         noise_persistence=0.5,
         noise_lacunarity=2.0,

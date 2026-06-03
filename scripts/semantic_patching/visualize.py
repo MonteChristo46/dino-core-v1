@@ -352,20 +352,20 @@ def main():
     parser.add_argument("--dataset-root", default=DATASET_ROOT)
     parser.add_argument("--output-dir", default=OUTPUT_DIR)
     parser.add_argument("--device", default="cuda", choices=["cpu", "cuda", "mps"])
-    parser.add_argument("--sam2-model-size", default="small",
+    parser.add_argument("--sam2-model-size", default="large",
                         choices=["tiny", "small", "base_plus", "large"])
     parser.add_argument("--sam2-min-area-ratio", type=float, default=0.02,
                         help="Min mask area as ratio of image (default: 0.02)")
-    parser.add_argument("--sam2-max-area-ratio", type=float, default=0.35,
+    parser.add_argument("--sam2-max-area-ratio", type=float, default=0.50,
                         help="Max mask area as ratio of image (default: 0.35)")
-    parser.add_argument("--sam2-pred-iou", type=float, default=0.88,
+    parser.add_argument("--sam2-pred-iou", type=float, default=0.70,
                         help="SAM2 pred_iou_thresh (default: 0.88)")
-    parser.add_argument("--sam2-stability", type=float, default=0.95,
+    parser.add_argument("--sam2-stability", type=float, default=0.8,
                         help="SAM2 stability_score_thresh (default: 0.95)")
     parser.add_argument("--dinov3-size", default="vitl",
                         choices=["vits", "vitsplus", "vitb", "vitl", "vithplus"])
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--fill-strategy", choices=["source", "dtd"], default="dtd",
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--fill-strategy", choices=["source", "dtd"], default="source",
                         help="Fill strategy for Perlin island (default: dtd)")
     parser.add_argument("--dtd-root", default=DTD_ROOT,
                         help="Path to DTD images directory (used when --fill-strategy=dtd)")
@@ -384,7 +384,7 @@ def main():
         stability_score_thresh=args.sam2_stability,
         min_area_ratio=args.sam2_min_area_ratio,
         max_area_ratio=args.sam2_max_area_ratio,
-        fallback_stability_thresholds=[0.90, 0.85, 0.80],
+        fallback_stability_thresholds=[0.70],
     )
 
     dinov3_weights = os.path.join(PROJECT_ROOT, "weights", f"dinov3_{args.dinov3_size}")
@@ -404,7 +404,7 @@ def main():
     )
 
     island_gen = PerlinIslandGenerator(
-        size_params=GammaSizeParams(shape=1.5, scale=0.07, min_ratio=0.03, max_ratio=0.15),
+        size_params=GammaSizeParams(),
         noise_octaves=4,
         noise_persistence=0.5,
         noise_lacunarity=2.0,
