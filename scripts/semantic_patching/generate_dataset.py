@@ -14,16 +14,13 @@ Usage:
 """
 
 import argparse
-from contextlib import nullcontext
 import logging
 import os
 import shutil
 import time
 import sys
 
-import cuml.accel
 import numpy as np
-import torch
 from PIL import Image
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,10 +29,13 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.backbones.dinov3 import DinoV3Backbone
 from src.clustering.hdbscan_clusterer import HDBSCANClusterer
 from src.masking.sam2_masker import SAM2Masker
-from src.synthesis.patch_composer import PatchComposer
 from src.synthesis.perlin_island import GammaSizeParams, PerlinIslandGenerator
 from src.synthesis.fillers import DTDTextureFiller, SourceTextureFiller
 from src.synthesis.random_composer import DTD_ROOT, RandomPatchComposer
+from src.synthesis.patch_composer import PatchComposer
+from src.augmentation import AugmentationChain
+from src.augmentation.strategies.semantic_patch import SemanticPatchStrategy
+from src.augmentation.strategies.random_patch import RandomPatchStrategy
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 LOGGER = logging.getLogger(__name__)
@@ -57,48 +57,6 @@ def collect_images(directory: str) -> list[str]:
         for f in os.listdir(directory)
         if f.lower().endswith((".png", ".jpg", ".jpeg"))
     )
-
-
-def extract_dino_features_batch(
-    backbone: DinoV3Backbone,
-    images_pil: list[Image.Image],
-    device: str,
-) -> list[torch.Tensor]:
-    from torchvision import transforms
-
-    t0 = time.time()
-
-    preprocess = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-
-    batch_tensor = torch.stack([preprocess(img) for img in images_pil]).to(device)
-
-    with torch.no_grad():
-        outputs = backbone(batch_tensor)
-        last_hidden = outputs.last_hidden_state
-
-    spatial = DinoV3Backbone.format_to_spatial_grid(last_hidden)
-    elapsed = time.time() - t0
-    LOGGER.info(
-        f"    DINOv3 batch: {len(images_pil)} images, "
-        f"input_shape={list(batch_tensor.shape)}, "
-        f"output_shape={list(spatial.shape)}, "
-        f"time={elapsed:.3f}s"
-    )
-    return [spatial[i] for i in range(len(images_pil))]
-
-
-def resize_mask_to_grid(mask: np.ndarray) -> np.ndarray:
-    import cv2
-    resized = cv2.resize(
-        mask.astype(np.float32),
-        (14, 14),
-        interpolation=cv2.INTER_AREA,
-    )
-    return (resized > 0.5).astype(np.uint8)
 
 
 def main():
@@ -151,26 +109,6 @@ def main():
     backbone = DinoV3Backbone(weights_dir=dinov3_weights).to(args.device)
     backbone.eval()
 
-    LOGGER.info("=" * 60)
-    LOGGER.info("Configuration:")
-    LOGGER.info(f"  categories: {categories}")
-    LOGGER.info(f"  device: {args.device}")
-    LOGGER.info(f"  DINOv3 size: {args.dinov3_size}")
-    LOGGER.info(f"  DINOv3 weights: {dinov3_weights}")
-    LOGGER.info(f"  DINOv3 batch size: {args.batch_size}")
-    LOGGER.info(f"  SAM2 model size: {args.sam2_model_size}")
-    LOGGER.info(f"  SAM2 pred_iou_thresh: {args.sam2_pred_iou}")
-    LOGGER.info(f"  SAM2 stability: {args.sam2_stability}")
-    LOGGER.info(f"  SAM2 area ratio: [{args.sam2_min_area_ratio}, {args.sam2_max_area_ratio}]")
-    LOGGER.info(f"  num_test per category: {args.num_test} (good={num_good}, bad={num_bad})")
-    LOGGER.info(f"  fill_strategy: {args.fill_strategy}")
-    LOGGER.info(f"  Perlin: shape=1.5, scale=0.10, min_ratio=0.03, max_ratio=0.25")
-    LOGGER.info(f"  Perlin: octaves=4, persistence=0.5, lacunarity=2.0, base_res=(8,8)")
-    LOGGER.info(f"  Perlin: sea_level_range=(0.05, 0.25)")
-    LOGGER.info(f"  seed: {args.seed}")
-    LOGGER.info("=" * 60)
-    LOGGER.info("")
-
     clusterer = HDBSCANClusterer(
         min_cluster_size=3,
         min_samples=None,
@@ -193,7 +131,7 @@ def main():
 
     filler = DTDTextureFiller(args.dtd_root, seed=args.seed) if args.fill_strategy == "dtd" else SourceTextureFiller()
 
-    composer = PatchComposer(
+    patch_composer = PatchComposer(
         island_generator=island_gen,
         filler=filler,
         seed=args.seed,
@@ -203,6 +141,40 @@ def main():
         dtd_root=DTD_ROOT,
         seed=args.seed,
     )
+
+    semantic_strategy = SemanticPatchStrategy(
+        backbone=backbone,
+        clusterer=clusterer,
+        composer=patch_composer,
+        random_composer=random_composer,
+        device=args.device,
+        min_coverage=0.05,
+        min_clusters=2,
+    )
+    random_strategy = RandomPatchStrategy(composer=random_composer)
+
+    chain = AugmentationChain([semantic_strategy, random_strategy])
+
+    LOGGER.info("=" * 60)
+    LOGGER.info("Configuration:")
+    LOGGER.info(f"  categories: {categories}")
+    LOGGER.info(f"  device: {args.device}")
+    LOGGER.info(f"  DINOv3 size: {args.dinov3_size}")
+    LOGGER.info(f"  DINOv3 weights: {dinov3_weights}")
+    LOGGER.info(f"  DINOv3 batch size: {args.batch_size}")
+    LOGGER.info(f"  SAM2 model size: {args.sam2_model_size}")
+    LOGGER.info(f"  SAM2 pred_iou_thresh: {args.sam2_pred_iou}")
+    LOGGER.info(f"  SAM2 stability: {args.sam2_stability}")
+    LOGGER.info(f"  SAM2 area ratio: [{args.sam2_min_area_ratio}, {args.sam2_max_area_ratio}]")
+    LOGGER.info(f"  num_test per category: {args.num_test} (good={num_good}, bad={num_bad})")
+    LOGGER.info(f"  fill_strategy: {args.fill_strategy}")
+    LOGGER.info(f"  Perlin: shape=1.5, scale=0.10, min_ratio=0.03, max_ratio=0.25")
+    LOGGER.info(f"  Perlin: octaves=4, persistence=0.5, lacunarity=2.0, base_res=(8,8)")
+    LOGGER.info(f"  Perlin: sea_level_range=(0.05, 0.25)")
+    LOGGER.info(f"  seed: {args.seed}")
+    LOGGER.info(f"  Augmentation chain: {chain}")
+    LOGGER.info("=" * 60)
+    LOGGER.info("")
 
     for category in categories:
         cat_start = time.time()
@@ -216,7 +188,6 @@ def main():
         test_bad_dir = os.path.join(cat_out, "test", "bad")
         gt_bad_dir = os.path.join(cat_out, "ground_truth", "bad")
 
-        # Clean output directory for this category to avoid permission issues with stale files
         if os.path.exists(cat_out):
             shutil.rmtree(cat_out)
 
@@ -258,75 +229,49 @@ def main():
             nonlocal bad_idx, valid_count, no_valid_count, fail_count
 
             batch_start = time.time()
-            images_pil = [item["image_pil"] for item in buffer]
-            features_list = extract_dino_features_batch(backbone, images_pil, args.device)
+            images_np = [item["image_np"] for item in buffer]
+            per_image_kwargs = [
+                {"sam2_mask": item["merged_mask"], "coverage": item["coverage"]}
+                for item in buffer
+            ]
+
+            results = chain.process_batch(images_np, per_image_kwargs, return_debug=True)
 
             batch_saved = 0
-            profile_fn = getattr(cuml.accel, "profile", None)
-            profile_cm = profile_fn(quiet=True) if callable(profile_fn) else nullcontext(None)
-            with profile_cm as profile_result:
-                for item, features_2d in zip(buffer, features_list):
-                    image_np = item["image_np"]
-                    merged_mask = item["merged_mask"]
-                    coverage = item["coverage"]
+            for item, (augmented_img, anchor_crop, anomaly_mask, debug_info) in zip(buffer, results):
+                strategy_name = debug_info.get("strategy", "unknown") if debug_info else "unknown"
+                succeeded = debug_info.get("success", False) if debug_info else False
 
-                    mask_14 = resize_mask_to_grid(merged_mask)
-                    feat_for_cluster = features_2d.permute(1, 2, 0).reshape(-1, features_2d.shape[0])
-                    clustering = clusterer.cluster(feat_for_cluster, mask_14)
-
-                    is_valid = coverage >= 0.05 and len(clustering.unique_clusters) >= 2
-
-                    LOGGER.debug(
-                        f"    img: coverage={coverage:.3f}, "
-                        f"clusters={clustering.unique_clusters}, "
-                        f"valid={is_valid}"
-                    )
-
-                    result = None
-                    if is_valid:
-                        result = composer.compose(
-                            image=image_np,
-                            sam2_mask=merged_mask,
-                            clustering=clustering,
-                            features_2d=features_2d,
-                        )
-                        if result is not None:
-                            valid_count += 1
+                if succeeded:
+                    if strategy_name == "semantic_patch":
+                        valid_count += 1
                     else:
-                        result = random_composer.compose(image=image_np)
-                        if result is not None:
-                            no_valid_count += 1
+                        no_valid_count += 1
+                else:
+                    fail_count += 1
+                    continue
 
-                    if result is None:
-                        fail_count += 1
-                        continue
+                if anomaly_mask is None or np.sum(anomaly_mask) == 0:
+                    fail_count += 1
+                    continue
 
-                    anomaly_img = result.augmented_image
-                    anomaly_mask = result.anomaly_mask
+                idx_str = f"{bad_idx:03d}"
+                img_out = os.path.join(test_bad_dir, f"{idx_str}.png")
+                mask_out = os.path.join(gt_bad_dir, f"{idx_str}_mask.png")
 
-                    if anomaly_mask is None or np.sum(anomaly_mask) == 0:
-                        fail_count += 1
-                        continue
+                Image.fromarray(augmented_img).save(img_out)
 
-                    idx_str = f"{bad_idx:03d}"
-                    img_out = os.path.join(test_bad_dir, f"{idx_str}.png")
-                    mask_out = os.path.join(gt_bad_dir, f"{idx_str}_mask.png")
+                mask_uint8 = (anomaly_mask > 0).astype(np.uint8) * 255
+                Image.fromarray(mask_uint8, mode="L").save(mask_out)
 
-                    Image.fromarray(anomaly_img).save(img_out)
-
-                    mask_uint8 = (anomaly_mask > 0).astype(np.uint8) * 255
-                    Image.fromarray(mask_uint8, mode="L").save(mask_out)
-
-                    bad_idx += 1
-                    batch_saved += 1
+                bad_idx += 1
+                batch_saved += 1
 
             LOGGER.info(
                 f"    Batch done: {len(buffer)} images processed, "
                 f"{batch_saved} saved, "
                 f"time={time.time() - batch_start:.3f}s"
             )
-            if profile_result is not None:
-                print(profile_result)
 
         while bad_idx < num_bad and src_idx < len(source_images) * 3:
             img_path = source_images[src_idx % len(source_images)]
@@ -347,17 +292,16 @@ def main():
             })
 
             if len(batch_buffer) >= args.batch_size:
-                LOGGER.info(f"  Batch full ({len(batch_buffer)} images), running DINOv3...")
+                LOGGER.info(f"  Batch full ({len(batch_buffer)} images), running pipeline...")
                 _process_batch(batch_buffer)
                 batch_buffer = []
 
         if batch_buffer:
-            LOGGER.info(f"  Final batch ({len(batch_buffer)} images), running DINOv3...")
+            LOGGER.info(f"  Final batch ({len(batch_buffer)} images), running pipeline...")
             _process_batch(batch_buffer)
             batch_buffer = []
 
         LOGGER.info(f"  SAM2 calls: {sam2_count}")
-
         LOGGER.info(f"  Generated {bad_idx} test/bad images (VALID={valid_count}, NO_VALID={no_valid_count}, failed={fail_count})")
         LOGGER.info(f"  Category {category} completed in {time.time() - cat_start:.1f}s")
         LOGGER.info("")
