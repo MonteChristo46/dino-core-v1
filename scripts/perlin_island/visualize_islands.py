@@ -221,7 +221,7 @@ def main():
     print(f"Found {len(categories)} categories (limited to {args.max_categories})")
 
     generator = PerlinIslandGenerator(
-        size_params=GammaSizeParams(shape=1.5, scale=0.10, min_ratio=0.03, max_ratio=0.25),
+        size_params=GammaSizeParams(shape=1.5, scale=0.07, min_ratio=0.03, max_ratio=0.15),
         noise_octaves=4,
         noise_persistence=0.5,
         noise_lacunarity=2.0,
@@ -235,8 +235,6 @@ def main():
         print(f"Loading DTD textures from {args.dtd_root}...")
         filler = DTDTextureFiller(args.dtd_root, seed=args.seed)
         print(f"  Loaded {len(filler._texture_paths)} textures")
-
-    stats_params = generator.size_params
 
     n_cols = args.islands_per_sample + 1
     n_rows = len(categories) * args.samples_per_category
@@ -315,18 +313,12 @@ def main():
     areas = []
     grad_counts = {gt: 0 for gt in GRADIENT_TYPES}
 
-    stats_rng = random.Random(args.seed + 100)
     total_area = 224 * 224
 
-    min_pixels = max(4, int(total_area * stats_params.min_ratio))
-    max_pixels = int(total_area * stats_params.max_ratio)
-
     for _ in range(n_test):
-        raw = stats_rng.gammavariate(stats_params.shape, stats_params.scale)
-        sampled_pixels = int(raw * total_area)
-        pixels = max(min_pixels, min(sampled_pixels, max_pixels))
+        pixels = int(generator._sample_area(mask_area=total_area, total_area=total_area))
         areas.append((pixels / total_area) * 100.0)
-        grad_counts[stats_rng.choice(GRADIENT_TYPES)] += 1
+        grad_counts[random.choice(GRADIENT_TYPES)] += 1
 
     fig2, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 

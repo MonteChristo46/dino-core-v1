@@ -72,9 +72,10 @@ class GammaSizeParams:
     """
 
     shape: float = 1.1
-    scale: float = 0.14
-    min_ratio: float = 0.05
-    max_ratio: float = 0.45
+    scale: float = 1.5
+    min_ratio: float = 0.03
+    max_ratio: float = 0.15
+    max_resample_attempts: int = 64
 
 
 @dataclass
@@ -136,10 +137,19 @@ class PerlinIslandGenerator:
         )
 
     def _sample_area(self, mask_area: int, total_area: int) -> float:
-        area = self._rng.gammavariate(self.size_params.shape, self.size_params.scale)
         min_pixels = max(4, int(total_area * self.size_params.min_ratio))
         max_pixels = max(int(mask_area * self.size_params.max_ratio), min_pixels)
-        pixels = int(area * total_area)
+
+        # Rejection sampling avoids a hard pile-up at max_ratio caused by
+        # clamping large gamma draws to the same upper bound.
+        pixels = min_pixels
+        for _ in range(max(1, self.size_params.max_resample_attempts)):
+            area = self._rng.gammavariate(self.size_params.shape, self.size_params.scale)
+            pixels = int(area * total_area)
+            if min_pixels <= pixels <= max_pixels:
+                return float(pixels)
+
+        # Fallback keeps behavior bounded even if the truncation range is tight.
         return float(max(min_pixels, min(pixels, max_pixels)))
 
     def _sample_threshold(self, positive: np.ndarray, target_pixels: int) -> float:

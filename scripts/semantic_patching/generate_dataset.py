@@ -120,7 +120,7 @@ def main():
     )
 
     island_gen = PerlinIslandGenerator(
-        size_params=GammaSizeParams(shape=1.5, scale=0.10, min_ratio=0.03, max_ratio=0.25),
+        size_params=GammaSizeParams(shape=1.5, scale=0.07, min_ratio=0.03, max_ratio=0.15),
         noise_octaves=4,
         noise_persistence=0.5,
         noise_lacunarity=2.0,
