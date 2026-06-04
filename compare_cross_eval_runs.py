@@ -122,6 +122,8 @@ def load_run_data(run_dir):
     model_name = ""
     for row in rows:
         cat = get_category(row)
+        if cat == "Mean" or not cat:
+            continue
         if not model_name:
             model_name = get_model_name(row)
         try:
@@ -389,11 +391,37 @@ def main():
         LOGGER.error("No valid runs found.")
         return
 
-    categories = run_data_list[0]["categories"]
-    for rd in run_data_list[1:]:
-        if rd["categories"] != categories:
-            LOGGER.warning("Category order mismatch between runs — using first run's order.")
+    # Compute intersection of categories across all runs
+    cat_sets = [set(rd["categories"]) for rd in run_data_list]
+    common_categories = cat_sets[0]
+    for cs in cat_sets[1:]:
+        common_categories &= cs
 
+    # Preserve first run's order for common categories
+    categories = [c for c in run_data_list[0]["categories"] if c in common_categories]
+
+    # Report excluded categories
+    for rd in run_data_list:
+        excluded = set(rd["categories"]) - common_categories
+        if excluded:
+            LOGGER.warning(f"{rd['short_model']}: excluding {len(excluded)} category(ies) not present in all runs: {sorted(excluded)}")
+
+    # Filter each run's data to only common categories (preserving order)
+    for rd in run_data_list:
+        mask = [c in common_categories for c in rd["categories"]]
+        rd["categories"] = [c for c, m in zip(rd["categories"], mask) if m]
+        rd["saved_threshold"] = rd["saved_threshold"][mask]
+        rd["computed_threshold"] = rd["computed_threshold"][mask]
+        rd["delta"] = rd["delta"][mask]
+        rd["abs_delta"] = rd["abs_delta"][mask]
+        rd["instance_auroc"] = rd["instance_auroc"][mask]
+        rd["full_pixel_auroc"] = rd["full_pixel_auroc"][mask]
+        rd["anomaly_pixel_auroc"] = rd["anomaly_pixel_auroc"][mask]
+        rd["precision"] = rd["precision"][mask]
+        rd["recall"] = rd["recall"][mask]
+        rd["f1"] = rd["f1"][mask]
+
+    LOGGER.info(f"Using {len(categories)} common categories across all runs: {categories}")
     LOGGER.info(f"Generating comparison plots for {len(run_data_list)} models...")
     plot_threshold_delta_grouped(run_data_list, categories, output_dir)
     plot_delta_lines(run_data_list, categories, output_dir)
