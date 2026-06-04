@@ -7,8 +7,8 @@ set -euo pipefail
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESULTS_BASE="${SCRIPT_DIR}/results"
-OUTPUT_DIR="${RESULTS_BASE}/cross_eval_comparison"
+RESULTS_BASE="${SCRIPT_DIR}/results/CrossEvalVisa"
+OUTPUT_DIR="${RESULTS_BASE}/cross_eval_comparison/visa"
 
 # Activate virtual environment
 VENV_DIR="${SCRIPT_DIR}/.venv"
@@ -42,7 +42,25 @@ fi
 echo ""
 echo "Found ${#RUN_DIRS[@]} cross-eval runs:"
 for d in "${RUN_DIRS[@]}"; do
-    echo "  - $(basename "$d")"
+    dir_name="$(basename "$d")"
+    model_name=""
+    if [ -f "$d/results.csv" ]; then
+        model_name=$(python3 -c "
+import csv
+with open('$d/results.csv') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        m = row.get('Model', row.get('model', '')).strip()
+        if m:
+            print(m)
+            break
+" 2>/dev/null || echo "")
+    fi
+    if [ -n "$model_name" ]; then
+        echo "  - ${dir_name}  [${model_name}]"
+    else
+        echo "  - ${dir_name}"
+    fi
 done
 echo ""
 

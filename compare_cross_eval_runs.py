@@ -77,30 +77,10 @@ def compute_figsize(n_categories, max_label_len, bar_groups=2):
     return (width, height)
 
 
-def short_model_name(full_name):
-    full_name = full_name.replace("__", "_")
-    parts = full_name.split("_")
-    dataset_prefix = parts[0]
-    dataset_name = None
-    dino_part = None
-    dims_part = None
-    for idx, p in enumerate(parts):
-        if p.lower().startswith("dinov") or p.lower() == "dino":
-            dino_part = "_".join(parts[idx:idx+2])
-            if idx > 1:
-                dataset_name = parts[idx - 1]
-        if p.upper().startswith("D") and "-" in p and len(p) < 20:
-            dims_part = p
-    tokens = [dataset_prefix]
-    if dataset_name:
-        tokens.append(dataset_name)
-    if dino_part:
-        tokens.append(dino_part)
-    if dims_part:
-        tokens.append(dims_part)
-    if len(tokens) > 1:
-        return "_".join(tokens)
-    return full_name[:40]
+def model_label(name):
+    safe = name.replace("__", "\n")
+    return safe.replace("_", "\n")
+
 
 
 def load_run_data(run_dir):
@@ -140,7 +120,6 @@ def load_run_data(run_dir):
 
     return {
         "model": model_name,
-        "short_model": short_model_name(model_name),
         "categories": categories,
         "saved_threshold": np.array(saved),
         "computed_threshold": np.array(computed),
@@ -171,7 +150,7 @@ def plot_threshold_delta_grouped(run_data_list, categories, output_dir):
     for i, rd in enumerate(run_data_list):
         offset = (i - (n_models - 1) / 2) * width
         bars = ax.bar(x + offset, rd["abs_delta"], width,
-                      label=rd["short_model"], color=PALETTE[i % len(PALETTE)], alpha=0.85)
+                      label=model_label(rd["model"]), color=PALETTE[i % len(PALETTE)], alpha=0.85)
         for bar in bars:
             height = bar.get_height()
             ax.annotate(f"{height:.3f}",
@@ -182,7 +161,7 @@ def plot_threshold_delta_grouped(run_data_list, categories, output_dir):
     for i, rd in enumerate(run_data_list):
         color = PALETTE[i % len(PALETTE)]
         ax.plot(x, rd["delta"], "o-", color=color, linewidth=1.5, markersize=4,
-                alpha=0.35, zorder=3, label=f"{rd['short_model']} Δ (signed)")
+                alpha=0.35, zorder=3, label=f"{model_label(rd['model'])} Δ (signed)")
 
     ax.axhline(0, color="gray", linewidth=1, linestyle="--", alpha=0.5)
 
@@ -209,7 +188,7 @@ def plot_delta_lines(run_data_list, categories, output_dir):
     for i, rd in enumerate(run_data_list):
         color = PALETTE[i % len(PALETTE)]
         ax.plot(x, rd["delta"], "o-", color=color, linewidth=2.5, markersize=7,
-                label=rd["short_model"])
+                label=model_label(rd["model"]))
         for xi, yi in zip(x, rd["delta"]):
             ax.annotate(f"{yi:+.3f}", xy=(xi, yi), xytext=(0, 6),
                         textcoords="offset points", ha="center", fontsize=7, color=color)
@@ -238,7 +217,7 @@ def plot_auroc_lines(run_data_list, categories, output_dir):
     for i, rd in enumerate(run_data_list):
         color = PALETTE[i % len(PALETTE)]
         ax.plot(x, rd["instance_auroc"], "o-", color=color, linewidth=2, markersize=7,
-                label=rd["short_model"])
+                label=model_label(rd["model"]))
         for xi, yi in zip(x, rd["instance_auroc"]):
             ax.annotate(f"{yi:.2f}", xy=(xi, yi), xytext=(0, 5),
                         textcoords="offset points", ha="center", fontsize=7, color=color)
@@ -267,7 +246,7 @@ def plot_threshold_scatter(run_data_list, output_dir):
         color = PALETTE[i % len(PALETTE)]
         ax.scatter(rd["saved_threshold"], rd["computed_threshold"],
                    c=color, s=80, alpha=0.8, edgecolors="white", linewidth=1,
-                   label=rd["short_model"], zorder=5)
+                   label=model_label(rd["model"]), zorder=5)
         all_saved.extend(rd["saved_threshold"].tolist())
         all_computed.extend(rd["computed_threshold"].tolist())
 
@@ -292,13 +271,14 @@ def plot_threshold_scatter(run_data_list, output_dir):
 
 
 def _plot_metric_heatmap(run_data_list, categories, metric_key, metric_label, output_dir, filename):
-    model_names = [rd["short_model"] for rd in run_data_list]
+    model_names = [model_label(rd["model"]) for rd in run_data_list]
     matrix = np.array([rd[metric_key] for rd in run_data_list])
 
     labels = wrap_labels(categories, max_width=10)
 
-    fig_width = max(10, len(categories) * 1.0)
-    fig_height = max(3, len(model_names) * 1.5)
+    max_lines = max(m.count("\n") + 1 for m in model_names) if model_names else 1
+    fig_width = max(10, len(categories) * 1.2)
+    fig_height = max(4, len(model_names) * max_lines * 0.55)
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
 
     im = ax.imshow(matrix, cmap="RdYlGn", aspect="auto", vmin=0, vmax=1)
@@ -313,7 +293,7 @@ def _plot_metric_heatmap(run_data_list, categories, metric_key, metric_label, ou
     ax.set_xticks(np.arange(len(categories)))
     ax.set_xticklabels(labels, fontsize=10, rotation=45, ha="right")
     ax.set_yticks(np.arange(len(model_names)))
-    ax.set_yticklabels(model_names, fontsize=12)
+    ax.set_yticklabels(model_names, fontsize=9, va="center")
 
     ax.set_xlabel("Category", fontsize=14, fontweight="bold")
     ax.set_ylabel("Model", fontsize=14, fontweight="bold")
@@ -323,6 +303,7 @@ def _plot_metric_heatmap(run_data_list, categories, metric_key, metric_label, ou
     cbar.set_label(metric_label, fontsize=12)
 
     plt.tight_layout()
+    fig.subplots_adjust(left=0.25)
     save_plot(fig, output_dir, filename)
     plt.close()
 
@@ -340,10 +321,13 @@ def plot_f1_heatmap(run_data_list, categories, output_dir):
 
 
 def plot_delta_boxplot(run_data_list, output_dir):
-    fig, ax = plt.subplots(1, 1, figsize=(7, 5))
+    labels = [model_label(rd["model"]) for rd in run_data_list]
+    max_lines = max(l.count("\n") + 1 for l in labels) if labels else 1
+    fig_width = max(7, len(run_data_list) * 3)
+    fig_height = max(5, max_lines * 0.8)
+    fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
 
     deltas = [rd["abs_delta"] for rd in run_data_list]
-    labels = [rd["short_model"] for rd in run_data_list]
 
     bp = ax.boxplot(deltas, tick_labels=labels, patch_artist=True, widths=0.5,
                     medianprops=dict(color="black", linewidth=2),
@@ -385,7 +369,7 @@ def main():
         rd = load_run_data(run_dir)
         if rd is not None:
             run_data_list.append(rd)
-            LOGGER.info(f"Loaded {rd['short_model']}: {len(rd['categories'])} categories")
+            LOGGER.info(f"Loaded {rd['model']}: {len(rd['categories'])} categories")
 
     if len(run_data_list) < 1:
         LOGGER.error("No valid runs found.")
@@ -404,7 +388,7 @@ def main():
     for rd in run_data_list:
         excluded = set(rd["categories"]) - common_categories
         if excluded:
-            LOGGER.warning(f"{rd['short_model']}: excluding {len(excluded)} category(ies) not present in all runs: {sorted(excluded)}")
+            LOGGER.warning(f"{rd['model']}: excluding {len(excluded)} category(ies) not present in all runs: {sorted(excluded)}")
 
     # Filter each run's data to only common categories (preserving order)
     for rd in run_data_list:

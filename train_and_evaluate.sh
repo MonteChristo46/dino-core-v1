@@ -6,19 +6,19 @@ set -euo pipefail
 # =============================================================================
 
 # Configurable dataset path (MVTec AD format)
-DATASET_PATH="${DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/semantic_synthetic_anomalies_v4}"
+DATASET_PATH="${DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/visa_synthetic_anomalies_v5}"
 
 # Training configuration
 GPU_ID="${GPU_ID:-0}"
 SEED="${SEED:-0}"
 IMAGE_SIZE="${IMAGE_SIZE:-384}"
 RESIZE="${RESIZE:-384}"
-BACKBONE="${BACKBONE:-dinov3_vitl}"
-LAYERS="${LAYERS:-8 12 16}"
+BACKBONE="${BACKBONE:-dinov3_vitb}"
+LAYERS="${LAYERS:-4 12}"
 CORESET_PERCENTAGE="${CORESET_PERCENTAGE:-0.1}"
-PRETRAIN_DIM="${PRETRAIN_DIM:-1024}"
-TARGET_DIM="${TARGET_DIM:-1024}"
-PATCH_SIZE="${PATCH_SIZE:-3}"
+PRETRAIN_DIM="${PRETRAIN_DIM:-768}"
+TARGET_DIM="${TARGET_DIM:-768}"
+PATCH_SIZE="${PATCH_SIZE:-1}"
 NUM_NN="${NUM_NN:-9}"
 
 if [[ "${BACKBONE}" == wideresnet50 ]]; then
@@ -72,7 +72,8 @@ fi
 
 mkdir -p "${RESULTS_BASE}"
 
-DATASETS=('bottle' 'cable' 'capsule' 'carpet' 'grid' 'hazelnut' 'leather' 'metal_nut' 'pill' 'screw' 'tile' 'toothbrush' 'transistor' 'wood' 'zipper')
+#DATASETS=('bottle' 'cable' 'capsule' 'carpet' 'grid' 'hazelnut' 'leather' 'metal_nut' 'pill' 'screw' 'tile' 'toothbrush' 'transistor' 'wood' 'zipper')
+DATASETS=('candle' 'capsules' 'cashew' 'chewinggum' 'fryum' 'macaroni1' 'macaroni2' 'pcb1' 'pcb2' 'pcb3' 'pcb4' 'pipe_fryum')
 
 dataset_flags=()
 for dataset in "${DATASETS[@]}"; do

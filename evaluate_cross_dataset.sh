@@ -7,7 +7,7 @@ set -euo pipefail
 # =============================================================================
 
 # Configurable paths
-MODEL_ROOT="${MODEL_ROOT:-results/IM384_SAv4_dinov3_vitl_L8-12-16_P0/1_D1024-1024_PS-3_AN-9_S0}"
+MODEL_ROOT="${MODEL_ROOT:-results/IM384_SAv4_dinov3_vitb_L4-12_P0/1_D768-768_PS-1_AN-9_S0}"
 EVAL_DATASET_PATH="${EVAL_DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/mvtec_small}"
 
 # Evaluation configuration
@@ -97,7 +97,6 @@ export PYTHONPATH="${SCRIPT_DIR}/src:${PYTHONPATH:-}"
 python "${SCRIPT_DIR}/scripts/patchcore/evaluate_cross_dataset.py" \
     --gpu "${GPU_ID}" \
     --seed "${SEED}" \
-    --save_segmentation_images \
     --log_group "${EVAL_LOG_GROUP}" \
     --log_project "${EVAL_LOG_PROJECT}" \
     "${RESULTS_BASE}" \

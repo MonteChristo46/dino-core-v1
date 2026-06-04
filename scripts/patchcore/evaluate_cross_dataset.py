@@ -3,6 +3,7 @@ import csv
 import gc
 import logging
 import os
+import resource
 import sys
 
 import click
@@ -19,6 +20,111 @@ LOGGER = logging.getLogger(__name__)
 _DATASETS = {"mvtec": ["patchcore.datasets.mvtec", "MVTecDataset"]}
 
 
+def _get_rss_gb():
+    status_file = "/proc/self/status"
+    try:
+        with open(status_file, "r", encoding="utf-8") as status_handle:
+            for line in status_handle:
+                if line.startswith("VmRSS:"):
+                    rss_kb = float(line.split()[1])
+                    return rss_kb / 1024.0 / 1024.0
+    except OSError:
+        pass
+
+    max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return max_rss / 1024.0 / 1024.0
+
+
+def _get_faiss_size_gb(model_path):
+    total_bytes = 0
+    if not os.path.isdir(model_path):
+        return 0.0
+
+    for entry in os.listdir(model_path):
+        if entry.endswith(".faiss"):
+            total_bytes += os.path.getsize(os.path.join(model_path, entry))
+    return total_bytes / 1024.0 / 1024.0 / 1024.0
+
+
+def _log_memory_state(stage, device):
+    rss_gb = _get_rss_gb()
+    if "cuda" in device.type.lower() and torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated(device) / 1024.0 / 1024.0 / 1024.0
+        reserved = torch.cuda.memory_reserved(device) / 1024.0 / 1024.0 / 1024.0
+        LOGGER.info(
+            f"[{stage}] RSS={rss_gb:.2f} GB | "
+            f"CUDA allocated={allocated:.2f} GB reserved={reserved:.2f} GB"
+        )
+    else:
+        LOGGER.info(f"[{stage}] RSS={rss_gb:.2f} GB")
+
+
+def _predict_in_chunks(patchcore_instance, test_dataloader, chunk_size, category, device):
+    dataset = test_dataloader.dataset
+    dataset_len = len(dataset)
+
+    if chunk_size <= 0 or chunk_size >= dataset_len:
+        LOGGER.info(
+            f"[{category}] Running prediction in one pass for {dataset_len} images."
+        )
+        return patchcore_instance.predict(test_dataloader)
+
+    LOGGER.info(
+        f"[{category}] Running chunked prediction with chunk_size={chunk_size} "
+        f"over {dataset_len} images."
+    )
+
+    batch_size = test_dataloader.batch_size if test_dataloader.batch_size else 1
+    num_workers = getattr(test_dataloader, "num_workers", 0)
+    pin_memory = getattr(test_dataloader, "pin_memory", False)
+    collate_fn = getattr(test_dataloader, "collate_fn", None)
+
+    all_scores = []
+    all_segmentations = []
+    all_labels_gt = []
+    all_masks_gt = []
+
+    for start_idx in range(0, dataset_len, chunk_size):
+        end_idx = min(start_idx + chunk_size, dataset_len)
+        chunk_indices = list(range(start_idx, end_idx))
+        chunk_subset = torch.utils.data.Subset(dataset, chunk_indices)
+        chunk_loader = torch.utils.data.DataLoader(
+            chunk_subset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            collate_fn=collate_fn,
+            drop_last=False,
+        )
+
+        chunk_scores, chunk_segmentations, chunk_labels_gt, chunk_masks_gt = (
+            patchcore_instance.predict(chunk_loader)
+        )
+
+        all_scores.extend(chunk_scores)
+        all_segmentations.extend(chunk_segmentations)
+        all_labels_gt.extend(chunk_labels_gt)
+        all_masks_gt.extend(chunk_masks_gt)
+
+        LOGGER.info(
+            f"[{category}] Predicted chunk {start_idx}:{end_idx} "
+            f"({end_idx}/{dataset_len})."
+        )
+        _log_memory_state(f"{category} chunk {start_idx}:{end_idx}", device)
+
+        del chunk_loader
+        del chunk_subset
+        del chunk_scores
+        del chunk_segmentations
+        del chunk_labels_gt
+        del chunk_masks_gt
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    return all_scores, all_segmentations, all_labels_gt, all_masks_gt
+
+
 @click.group(chain=True)
 @click.argument("results_path", type=str)
 @click.option("--gpu", type=int, default=[0], multiple=True, show_default=True)
@@ -26,12 +132,22 @@ _DATASETS = {"mvtec": ["patchcore.datasets.mvtec", "MVTecDataset"]}
 @click.option("--log_group", type=str, default="group")
 @click.option("--log_project", type=str, default="project")
 @click.option("--save_segmentation_images", is_flag=True)
+@click.option("--predict_chunk_size", type=int, default=128, show_default=True)
 def main(**kwargs):
     pass
 
 
 @main.result_callback()
-def run(methods, results_path, gpu, seed, log_group, log_project, save_segmentation_images):
+def run(
+    methods,
+    results_path,
+    gpu,
+    seed,
+    log_group,
+    log_project,
+    save_segmentation_images,
+    predict_chunk_size,
+):
     methods = {key: item for (key, item) in methods}
 
     run_save_path = patchcore.utils.create_storage_folder(
@@ -71,37 +187,51 @@ def run(methods, results_path, gpu, seed, log_group, log_project, save_segmentat
 
         LOGGER.info(f"Evaluating [{category}] with saved threshold {saved_threshold:.4f}...")
 
+        n_test_images = len(data_info["dataloaders"][category].dataset)
+        faiss_size_gb = _get_faiss_size_gb(model_path)
+        LOGGER.info(
+            f"[{category}] test_images={n_test_images} | "
+            f"faiss_index_size={faiss_size_gb:.2f} GB"
+        )
+        _log_memory_state(f"{category} start", device)
+
         dataset_name = f"mvtec_{category}"
 
         with device_context:
             torch.cuda.empty_cache()
 
-            nn_method = patchcore.common.FaissNN(False, 4)
+            #nn_method = patchcore.common.FaissNN(False, 4)
+            nn_method = patchcore.common.ApproximateFaissNN(on_gpu=True)
             patchcore_instance = patchcore.patchcore.PatchCore(device)
             patchcore_instance.load_from_path(
                 load_path=model_path, device=device, nn_method=nn_method
             )
+            _log_memory_state(f"{category} after model load", device)
 
             test_dataloader = data_info["dataloaders"][category]
             imagesize = test_dataloader.dataset.imagesize
 
             LOGGER.info("Embedding test data...")
-            scores, segmentations, labels_gt, masks_gt = patchcore_instance.predict(
-                test_dataloader
+            scores, segmentations, labels_gt, masks_gt = _predict_in_chunks(
+                patchcore_instance,
+                test_dataloader,
+                predict_chunk_size,
+                category,
+                device,
             )
+            _log_memory_state(f"{category} after predict", device)
 
-            scores = np.array(scores)
-            segmentations = np.array(segmentations)
+            scores = np.asarray(scores, dtype=np.float32).flatten()
+            segmentations = np.stack(segmentations, axis=0)
+            masks_gt = np.asarray(masks_gt, dtype=np.float32)
 
-            min_scores = scores.min(axis=-1).reshape(-1, 1)
-            max_scores = scores.max(axis=-1).reshape(-1, 1)
-            scores = (scores - min_scores) / (max_scores - min_scores)
-            scores = scores.flatten()
+            min_scores = scores.min()
+            max_scores = scores.max()
+            scores = (scores - min_scores) / (max_scores - min_scores + 1e-12)
 
-            min_seg = segmentations.reshape(segmentations.shape[0], -1).min(axis=-1).reshape(-1, 1, 1, 1)
-            max_seg = segmentations.reshape(segmentations.shape[0], -1).max(axis=-1).reshape(-1, 1, 1, 1)
-            segmentations = (segmentations - min_seg) / (max_seg - min_seg)
-            segmentations = segmentations[0]
+            min_seg = segmentations.reshape(segmentations.shape[0], -1).min(axis=-1).reshape(-1, 1, 1)
+            max_seg = segmentations.reshape(segmentations.shape[0], -1).max(axis=-1).reshape(-1, 1, 1)
+            segmentations = (segmentations - min_seg) / (max_seg - min_seg + 1e-12)
 
             anomaly_labels = [
                 x[1] != "good" for x in test_dataloader.dataset.data_to_iterate
@@ -115,7 +245,7 @@ def run(methods, results_path, gpu, seed, log_group, log_project, save_segmentat
             optimal_threshold = image_metrics["optimal_threshold"]
 
             pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
-                [segmentations], [masks_gt]
+                segmentations, masks_gt
             )
             full_pixel_auroc = pixel_scores["auroc"]
 
@@ -125,12 +255,14 @@ def run(methods, results_path, gpu, seed, log_group, log_project, save_segmentat
                     sel_idxs.append(i)
             if sel_idxs:
                 pixel_scores = patchcore.metrics.compute_pixelwise_retrieval_metrics(
-                    [segmentations[i] for i in sel_idxs],
-                    [masks_gt[i] for i in sel_idxs],
+                    segmentations[sel_idxs],
+                    masks_gt[sel_idxs],
                 )
                 anomaly_pixel_auroc = pixel_scores["auroc"]
             else:
                 anomaly_pixel_auroc = 0.0
+
+            _log_memory_state(f"{category} after metrics", device)
 
             tp = fp = fn = tn = 0
             categories = []
@@ -230,9 +362,20 @@ def run(methods, results_path, gpu, seed, log_group, log_project, save_segmentat
             )
 
             del patchcore_instance
+            del nn_method
+            del scores
+            del segmentations
+            del labels_gt
+            del masks_gt
             gc.collect()
+            torch.cuda.empty_cache()
+            _log_memory_state(f"{category} after cleanup", device)
 
         LOGGER.info("\n\n-----\n")
+
+    if not result_collect:
+        LOGGER.error("No category results collected; not writing result files.")
+        return
 
     # Store results.csv
     all_keys = list(result_collect[-1].keys())
@@ -322,7 +465,7 @@ def cross_eval(model_root):
 @click.argument("data_path", type=click.Path(exists=True, file_okay=False))
 @click.option("--subdatasets", "-d", multiple=True, type=str, required=True)
 @click.option("--batch_size", default=1, type=int, show_default=True)
-@click.option("--num_workers", default=8, type=int, show_default=True)
+@click.option("--num_workers", default=2, type=int, show_default=True)
 @click.option("--resize", default=256, type=int, show_default=True)
 @click.option("--imagesize", default=224, type=int, show_default=True)
 def dataset(name, data_path, subdatasets, batch_size, resize, imagesize, num_workers):
@@ -346,8 +489,8 @@ def dataset(name, data_path, subdatasets, batch_size, resize, imagesize, num_wor
             test_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True,
+            num_workers=0,
+            pin_memory=False,
         )
 
         test_dataloader.name = name + "_" + subdataset

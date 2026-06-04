@@ -46,14 +46,19 @@ from src.synthesis.random_composer import DTD_ROOT, RandomPatchComposer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 LOGGER = logging.getLogger(__name__)
 
-DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "mvtec_small")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "semantic_synthetic_anomalies")
+DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "VisA_pytorch")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "semantic_synthetic_anomalies_v5")
 
 ALL_CATEGORIES = [
-    "bottle", "cable", "capsule", "carpet", "grid",
-    "hazelnut", "leather", "metal_nut", "pill", "screw",
-    "tile", "toothbrush", "transistor", "wood", "zipper",
+    "candle", "capsules", "cashew", "chewinggum", "fryum",
+    "macaroni1", "macaroni2", "pcb1", "pcb2", "pcb3", "pcb4", "pipe_fryum",
 ]
+#ALL_CATEGORIES = [
+#    "bottle", "cable", "capsule", "carpet", "grid",
+#    "hazelnut", "leather", "metal_nut", "pill", "screw",
+#    "tile", "toothbrush", "transistor", "wood", "zipper",
+#]
+
 
 MIN_COVERAGE_THRESHOLD = 0.05
 STOP_TOKEN = "__STOP__"
