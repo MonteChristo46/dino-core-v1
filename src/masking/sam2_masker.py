@@ -135,7 +135,7 @@ class SAM2Masker(BaseMasker):
         stability_score_thresh: float = 0.97,
         crop_n_layers: int = 0,
         min_area_ratio: float = 0.01,
-        max_area_ratio: float = 0.4,
+        max_area_ratio: float = 0.70,
         nms_iou_thresh: float = 0.5,
         dedup_iou: float = 0.95,
         fallback_stability_thresholds: Optional[List[float]] = None,
@@ -143,8 +143,8 @@ class SAM2Masker(BaseMasker):
         morph_cleanup: bool = True,
         morph_kernel_size: int = 3,
         remove_background_like: bool = True,
-        background_min_area_ratio: float = 0.25,
-        background_min_border_touch_ratio: float = 0.15,
+        background_min_area_ratio: float = 0.60,
+        background_min_border_touch_ratio: float = 0.50,
         min_mask_region_area: int = 100,
     ):
         self.model_size = model_size

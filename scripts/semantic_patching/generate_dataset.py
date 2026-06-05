@@ -32,7 +32,10 @@ from PIL import Image
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
+from config import ClusteringConfig, FillerConfig, PerlinConfig, PipelineConfig, SAM2Config, augmentation_config
 from src.augmentation import AugmentationChain
+from src.augmentation.blenders.feather import FeatherBlender
+from src.augmentation.blenders.seamless_clone import SeamlessCloneBlender
 from src.augmentation.strategies.random_patch import RandomPatchStrategy
 from src.augmentation.strategies.semantic_patch import SemanticPatchStrategy
 from src.backbones.dinov3 import DinoV3Backbone
@@ -40,18 +43,21 @@ from src.clustering.hdbscan_clusterer import HDBSCANClusterer
 from src.masking.sam2_masker import SAM2Masker
 from src.synthesis.fillers import DTDTextureFiller, SourceTextureFiller
 from src.synthesis.patch_composer import PatchComposer
-from src.synthesis.perlin_island import GammaSizeParams, PerlinIslandGenerator
+from src.synthesis.perlin_island import PerlinIslandGenerator
 from src.synthesis.random_composer import DTD_ROOT, RandomPatchComposer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 LOGGER = logging.getLogger(__name__)
 
-DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "VisA_pytorch")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "semantic_synthetic_anomalies_v5")
+DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "BigD")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "BigD_synthetic_anomalies_v7")
 
 ALL_CATEGORIES = [
     "candle", "capsules", "cashew", "chewinggum", "fryum",
     "macaroni1", "macaroni2", "pcb1", "pcb2", "pcb3", "pcb4", "pipe_fryum",
+    "bottle", "cable", "capsule", "carpet", "grid",
+    "hazelnut", "leather", "metal_nut", "pill", "screw",
+    "tile", "toothbrush", "transistor", "wood", "zipper",
 ]
 #ALL_CATEGORIES = [
 #    "bottle", "cable", "capsule", "carpet", "grid",
@@ -60,7 +66,6 @@ ALL_CATEGORIES = [
 #]
 
 
-MIN_COVERAGE_THRESHOLD = 0.05
 STOP_TOKEN = "__STOP__"
 
 
@@ -249,33 +254,102 @@ def process_batch(
 
 def main() -> None:
     overall_start = time.time()
+
+    sam2_defaults = SAM2Config()
+    clustering_defaults = ClusteringConfig()
+    perlin_defaults = PerlinConfig()
+    pipeline_defaults = PipelineConfig()
+    filler_defaults = FillerConfig()
+
     parser = argparse.ArgumentParser(description="Generate MVTec-format synthetic anomaly dataset")
     parser.add_argument("--categories", nargs="*", default=None, help="Specific categories")
     parser.add_argument("--dataset-root", default=DATASET_ROOT)
     parser.add_argument("--output-dir", default=OUTPUT_DIR)
-    parser.add_argument("--num-test", type=int, default=100)
-    parser.add_argument("--device", default="cuda", choices=["cpu", "cuda", "mps"])
-    parser.add_argument("--sam2-model-size", default="small", choices=["tiny", "small", "base_plus", "large"])
-    parser.add_argument("--sam2-min-area-ratio", type=float, default=0.02)
-    parser.add_argument("--sam2-max-area-ratio", type=float, default=0.50)
-    parser.add_argument("--sam2-pred-iou", type=float, default=0.70)
-    parser.add_argument("--sam2-stability", type=float, default=0.80)
+    parser.add_argument("--num-test", type=int, default=pipeline_defaults.num_test)
+    parser.add_argument("--device", default=sam2_defaults.device, choices=["cpu", "cuda", "mps"])
+    parser.add_argument("--sam2-model-size", default=sam2_defaults.model_size, choices=["tiny", "small", "base_plus", "large"])
+    parser.add_argument("--sam2-min-area-ratio", type=float, default=sam2_defaults.min_area_ratio)
+    parser.add_argument("--sam2-max-area-ratio", type=float, default=sam2_defaults.max_area_ratio)
+    parser.add_argument("--sam2-pred-iou", type=float, default=sam2_defaults.pred_iou_thresh)
+    parser.add_argument("--sam2-stability", type=float, default=sam2_defaults.stability_score_thresh)
     parser.add_argument("--dinov3-size", default="vitl", choices=["vits", "vitsplus", "vitb", "vitl", "vithplus"])
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--batch-size", type=int, default=pipeline_defaults.batch_size)
+    parser.add_argument("--seed", type=int, default=pipeline_defaults.seed)
     parser.add_argument("--fill-strategy", choices=["source", "dtd"], default="source")
+    parser.add_argument(
+        "--dtd-mix-prob",
+        type=float,
+        default=filler_defaults.dtd_mix_prob,
+        help="Probability of using DTD fill instead of source fill in semantic mode",
+    )
+    parser.add_argument("--blender", choices=["feather", "seamless_clone"], default="feather")
     parser.add_argument("--dtd-root", default=DTD_ROOT)
-    parser.add_argument("--reader-workers", type=int, default=2, help="Reader process count")
-    parser.add_argument("--writer-workers", type=int, default=2, help="Writer process count")
-    parser.add_argument("--read-queue-size", type=int, default=32)
-    parser.add_argument("--decoded-queue-size", type=int, default=32)
-    parser.add_argument("--write-queue-size", type=int, default=64)
-    parser.add_argument("--heartbeat-sec", type=float, default=5.0)
+    parser.add_argument("--reader-workers", type=int, default=pipeline_defaults.reader_workers, help="Reader process count")
+    parser.add_argument("--writer-workers", type=int, default=pipeline_defaults.writer_workers, help="Writer process count")
+    parser.add_argument("--read-queue-size", type=int, default=pipeline_defaults.read_queue_size)
+    parser.add_argument("--decoded-queue-size", type=int, default=pipeline_defaults.decoded_queue_size)
+    parser.add_argument("--write-queue-size", type=int, default=pipeline_defaults.write_queue_size)
+    parser.add_argument("--heartbeat-sec", type=float, default=pipeline_defaults.heartbeat_sec)
     args = parser.parse_args()
 
     categories = args.categories if args.categories else ALL_CATEGORIES
     num_good = args.num_test // 2
     num_bad = args.num_test - num_good
+
+    LOGGER.info("=" * 64)
+    LOGGER.info("Configuration")
+    LOGGER.info("=" * 64)
+    LOGGER.info("  categories: %s", categories)
+    LOGGER.info("  dataset_root: %s", args.dataset_root)
+    LOGGER.info("  output_dir: %s", args.output_dir)
+    LOGGER.info("  num_test: %d (good=%d, bad=%d)", args.num_test, num_good, num_bad)
+    LOGGER.info("  device: %s", args.device)
+    LOGGER.info("  seed: %d", args.seed)
+    LOGGER.info("  dinov3_size: %s", args.dinov3_size)
+    LOGGER.info("  batch_size: %d", args.batch_size)
+    LOGGER.info("  min_coverage_threshold: %.4f", pipeline_defaults.min_coverage_threshold)
+    LOGGER.info("  min_clusters: %d", pipeline_defaults.min_clusters)
+    LOGGER.info("  fill_strategy: %s", args.fill_strategy)
+    LOGGER.info("  dtd_mix_prob: %.3f", args.dtd_mix_prob)
+    LOGGER.info("  blender: %s", args.blender)
+    LOGGER.info("  seamless_mode: mixed")
+    LOGGER.info("  reader_workers: %d", args.reader_workers)
+    LOGGER.info("  writer_workers: %d", args.writer_workers)
+    LOGGER.info("  queue_sizes: read=%d, decoded=%d, write=%d",
+                args.read_queue_size, args.decoded_queue_size, args.write_queue_size)
+    LOGGER.info("  heartbeat_sec: %.1f", args.heartbeat_sec)
+    LOGGER.info("")
+    LOGGER.info("  SAM2:")
+    LOGGER.info("    model_size: %s", args.sam2_model_size)
+    LOGGER.info("    min_area_ratio: %.4f", args.sam2_min_area_ratio)
+    LOGGER.info("    max_area_ratio: %.4f", args.sam2_max_area_ratio)
+    LOGGER.info("    pred_iou_thresh: %.4f", args.sam2_pred_iou)
+    LOGGER.info("    stability_score_thresh: %.4f", args.sam2_stability)
+    LOGGER.info("    background_min_area_ratio: %.4f", sam2_defaults.background_min_area_ratio)
+    LOGGER.info("    background_min_border_touch_ratio: %.4f", sam2_defaults.background_min_border_touch_ratio)
+    LOGGER.info("    fallback_stability_thresholds: %s", sam2_defaults.fallback_stability_thresholds)
+    LOGGER.info("")
+    LOGGER.info("  Clustering:")
+    LOGGER.info("    min_cluster_size: %d", clustering_defaults.min_cluster_size)
+    LOGGER.info("    min_samples: %s", clustering_defaults.min_samples)
+    LOGGER.info("    cluster_selection_epsilon: %.4f", clustering_defaults.cluster_selection_epsilon)
+    LOGGER.info("    metric: %s", clustering_defaults.metric)
+    LOGGER.info("    umap_dims: %d", clustering_defaults.umap_dims)
+    LOGGER.info("    umap_n_neighbors: %d", clustering_defaults.umap_n_neighbors)
+    LOGGER.info("    umap_min_dist: %.4f", clustering_defaults.umap_min_dist)
+    LOGGER.info("")
+    LOGGER.info("  Perlin:")
+    LOGGER.info("    size_params: shape=%.4f, scale=%.4f, min_ratio=%.4f, max_ratio=%.4f",
+                perlin_defaults.size_params.shape,
+                perlin_defaults.size_params.scale,
+                perlin_defaults.size_params.min_ratio,
+                perlin_defaults.size_params.max_ratio)
+    LOGGER.info("    noise_octaves: %d", perlin_defaults.noise_octaves)
+    LOGGER.info("    noise_persistence: %.4f", perlin_defaults.noise_persistence)
+    LOGGER.info("    noise_lacunarity: %.4f", perlin_defaults.noise_lacunarity)
+    LOGGER.info("    noise_base_res: %s", perlin_defaults.noise_base_res)
+    LOGGER.info("    sea_level_range: %s", perlin_defaults.sea_level_range)
+    LOGGER.info("=" * 64)
 
     LOGGER.info("Loading models...")
     sam2_weights = os.path.join(PROJECT_ROOT, "weights", "sam2")
@@ -287,7 +361,9 @@ def main() -> None:
         stability_score_thresh=args.sam2_stability,
         min_area_ratio=args.sam2_min_area_ratio,
         max_area_ratio=args.sam2_max_area_ratio,
-        fallback_stability_thresholds=[0.7],
+        background_min_area_ratio=sam2_defaults.background_min_area_ratio,
+        background_min_border_touch_ratio=sam2_defaults.background_min_border_touch_ratio,
+        fallback_stability_thresholds=sam2_defaults.fallback_stability_thresholds,
     )
 
     dinov3_weights = os.path.join(PROJECT_ROOT, "weights", f"dinov3_{args.dinov3_size}")
@@ -297,27 +373,37 @@ def main() -> None:
     backbone.eval()
 
     clusterer = HDBSCANClusterer(
-        min_cluster_size=3,
-        min_samples=None,
-        cluster_selection_epsilon=0.0,
-        metric="euclidean",
-        umap_dims=20,
-        umap_n_neighbors=15,
-        umap_min_dist=0.0,
+        min_cluster_size=clustering_defaults.min_cluster_size,
+        min_samples=clustering_defaults.min_samples,
+        cluster_selection_epsilon=clustering_defaults.cluster_selection_epsilon,
+        metric=clustering_defaults.metric,
+        umap_dims=clustering_defaults.umap_dims,
+        umap_n_neighbors=clustering_defaults.umap_n_neighbors,
+        umap_min_dist=clustering_defaults.umap_min_dist,
     )
 
     island_gen = PerlinIslandGenerator(
-        size_params=GammaSizeParams(),
-        noise_octaves=4,
-        noise_persistence=0.5,
-        noise_lacunarity=2.0,
-        noise_base_res=(8, 8),
-        sea_level_range=(0.05, 0.25),
+        size_params=perlin_defaults.size_params,
+        noise_octaves=perlin_defaults.noise_octaves,
+        noise_persistence=perlin_defaults.noise_persistence,
+        noise_lacunarity=perlin_defaults.noise_lacunarity,
+        noise_base_res=perlin_defaults.noise_base_res,
+        sea_level_range=perlin_defaults.sea_level_range,
         seed=args.seed,
     )
 
-    filler = DTDTextureFiller(args.dtd_root, seed=args.seed) if args.fill_strategy == "dtd" else SourceTextureFiller()
-    patch_composer = PatchComposer(island_generator=island_gen, filler=filler, seed=args.seed)
+    dtd_mix_prob = float(np.clip(args.dtd_mix_prob, 0.0, 1.0))
+    dtd_filler = DTDTextureFiller(args.dtd_root, seed=args.seed)
+    filler = dtd_filler if args.fill_strategy == "dtd" else SourceTextureFiller()
+    blender = SeamlessCloneBlender(mode=augmentation_config.BlenderConfig.seamless_mode) if args.blender == "seamless_clone" else FeatherBlender(augmentation_config.BlenderConfig.feather_radius, augmentation_config.BlenderConfig.feather_alpha)
+    patch_composer = PatchComposer(
+        island_generator=island_gen,
+        blender=blender,
+        filler=filler,
+        dtd_filler=(dtd_filler if args.fill_strategy == "source" else None),
+        dtd_mix_prob=(dtd_mix_prob if args.fill_strategy == "source" else 0.0),
+        seed=args.seed,
+    )
     random_composer = RandomPatchComposer(island_generator=island_gen, dtd_root=DTD_ROOT, seed=args.seed)
 
     semantic_strategy = SemanticPatchStrategy(
@@ -326,7 +412,7 @@ def main() -> None:
         composer=patch_composer,
         random_composer=random_composer,
         device=args.device,
-        min_coverage=MIN_COVERAGE_THRESHOLD,
+        min_coverage=pipeline_defaults.min_coverage_threshold,
         min_clusters=2,
     )
     random_strategy = RandomPatchStrategy(composer=random_composer)
@@ -338,7 +424,7 @@ def main() -> None:
     LOGGER.info("  device: %s", args.device)
     LOGGER.info("  DINOv3 weights: %s", dinov3_weights)
     LOGGER.info("  batch_size: %d", args.batch_size)
-    LOGGER.info("  min_coverage_threshold: %.3f", MIN_COVERAGE_THRESHOLD)
+    LOGGER.info("  min_coverage_threshold: %.3f", pipeline_defaults.min_coverage_threshold)
     LOGGER.info("  reader_workers: %d", args.reader_workers)
     LOGGER.info("  writer_workers: %d", args.writer_workers)
     LOGGER.info("  queue_sizes(read/decoded/write): %d/%d/%d", args.read_queue_size, args.decoded_queue_size, args.write_queue_size)
@@ -412,7 +498,7 @@ def main() -> None:
 
         bad_idx = 0
         valid_count = 0
-        no_valid_count = 0
+        random_count = 0
         fail_count = 0
         sam2_count = 0
 
@@ -456,12 +542,13 @@ def main() -> None:
                 now = time.time()
                 if now - last_heartbeat >= args.heartbeat_sec:
                     LOGGER.info(
-                        "  [heartbeat] bad=%d/%d attempts=%d/%d q(read=%d decoded=%d write=%d) "
+                        "  [heartbeat] bad=%d/%d attempts=%d/%d pending=%d q(read=%d decoded=%d write=%d) "
                         "mean_s(decode=%.3f sam2=%.3f batch=%.3f write=%.3f) strategy(valid=%d random=%d fail=%d)",
                         bad_idx,
                         num_bad,
                         completed_attempts,
                         max_attempts,
+                        len(batch_buffer),
                         safe_qsize(read_q),
                         safe_qsize(decoded_q),
                         safe_qsize(write_q),
@@ -470,7 +557,7 @@ def main() -> None:
                         batch_timer.mean(),
                         write_timer.mean(),
                         valid_count,
-                        no_valid_count,
+                        random_count,
                         fail_count,
                     )
                     last_heartbeat = now
@@ -483,7 +570,7 @@ def main() -> None:
                         batch_buffer,
                         chain,
                         random_strategy,
-                        min_coverage_threshold=MIN_COVERAGE_THRESHOLD,
+                        min_coverage_threshold=pipeline_defaults.min_coverage_threshold,
                     )
                     batch_timer.add(timings["batch_s"])
 
@@ -514,7 +601,7 @@ def main() -> None:
                         saved_this_batch += 1
 
                     valid_count += saved_semantic
-                    no_valid_count += saved_random
+                    random_count += saved_random
 
                     LOGGER.info(
                         "  Batch done: in=%d saved=%d semantic=%d random=%d failed=%d "
@@ -572,7 +659,7 @@ def main() -> None:
                     batch_buffer,
                     chain,
                     random_strategy,
-                    min_coverage_threshold=MIN_COVERAGE_THRESHOLD,
+                    min_coverage_threshold=pipeline_defaults.min_coverage_threshold,
                 )
                 batch_timer.add(timings["batch_s"])
                 fail_count += counters["failed"]
@@ -594,7 +681,7 @@ def main() -> None:
                     if output["strategy"] == "semantic_patch":
                         valid_count += 1
                     else:
-                        no_valid_count += 1
+                        random_count += 1
                     bad_idx += 1
 
             flush_write_acks(non_blocking=False)
@@ -621,10 +708,10 @@ def main() -> None:
 
         LOGGER.info("  SAM2 calls: %d", sam2_count)
         LOGGER.info(
-            "  Generated %d test/bad images (VALID=%d, NO_VALID=%d, failed=%d)",
+            "  Generated %d test/bad images (VALID=%d, RANDOM=%d, failed=%d)",
             bad_idx,
             valid_count,
-            no_valid_count,
+            random_count,
             fail_count,
         )
         if fail_reason_counter:

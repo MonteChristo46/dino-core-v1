@@ -6,13 +6,11 @@ with visual content. Each filler is independent and can be swapped.
 
 from __future__ import annotations
 
-import os
 import random
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
-import cv2
 import numpy as np
 from PIL import Image
 
@@ -42,9 +40,30 @@ class IslandFiller(ABC):
 class SourceTextureFiller(IslandFiller):
     """Fill island with actual texture sampled from source region.
 
-    Extracts the source cluster region, scales it to fit the island
-    bounding box, and returns it as the fill content.
+    Samples local source windows that match the island patch size,
+    then picks the one with the highest source-cluster coverage over
+    the island support. This preserves local texture without resizing
+    a large source region into the island.
+
+    Args:
+        max_tries: Number of random source-centered windows to evaluate.
+        min_coverage: Early-stop threshold for accepted coverage in [0, 1].
+        strict: If True, return zeros when no candidate reaches
+            ``min_coverage``. If False, return the best candidate.
+        seed: Optional random seed for reproducible sampling.
     """
+
+    def __init__(
+        self,
+        max_tries: int = 64,
+        min_coverage: float = 0.90,
+        strict: bool = False,
+        seed: Optional[int] = None,
+    ):
+        self.max_tries = max(1, int(max_tries))
+        self.min_coverage = float(np.clip(min_coverage, 0.0, 1.0))
+        self.strict = strict
+        self._rng = np.random.default_rng(seed)
 
     def fill(
         self,
@@ -54,23 +73,62 @@ class SourceTextureFiller(IslandFiller):
     ) -> np.ndarray:
         ih, iw = island_mask.shape[:2]
         result = np.zeros((ih, iw, 3), dtype=np.uint8)
+        h, w = image.shape[:2]
 
+        if ih == 0 or iw == 0:
+            return result
+        if h < ih or w < iw:
+            return result
         if not np.any(source_pixels):
             return result
 
-        ys, xs = np.where(source_pixels)
-        y_min, y_max = ys.min(), ys.max()
-        x_min, x_max = xs.min(), xs.max()
-
-        src_patch = image[y_min : y_max + 1, x_min : x_max + 1]
-
-        if src_patch.shape[0] == 0 or src_patch.shape[1] == 0:
+        island_support = island_mask > 0
+        support_count = int(np.sum(island_support))
+        if support_count == 0:
             return result
 
-        scaled = cv2.resize(src_patch, (iw, ih), interpolation=cv2.INTER_LINEAR)
+        ys, xs = np.where(source_pixels)
+        if len(ys) == 0:
+            return result
 
-        result[...] = scaled
-        return result
+        n = len(ys)
+        tries = min(self.max_tries, n)
+        if tries == n:
+            sample_idx = self._rng.permutation(n)
+        else:
+            sample_idx = self._rng.choice(n, size=tries, replace=False)
+
+        best_patch: Optional[np.ndarray] = None
+        best_coverage = -1.0
+
+        for idx in sample_idx:
+            cy = int(ys[idx])
+            cx = int(xs[idx])
+
+            y1 = cy - ih // 2
+            x1 = cx - iw // 2
+            y1 = int(np.clip(y1, 0, h - ih))
+            x1 = int(np.clip(x1, 0, w - iw))
+            y2 = y1 + ih
+            x2 = x1 + iw
+
+            window_source = source_pixels[y1:y2, x1:x2]
+            coverage = float(np.mean(window_source[island_support]))
+
+            if coverage > best_coverage:
+                best_coverage = coverage
+                best_patch = image[y1:y2, x1:x2].copy()
+
+            if coverage >= self.min_coverage:
+                return image[y1:y2, x1:x2].copy()
+
+        if best_patch is None:
+            return result
+
+        if self.strict and best_coverage < self.min_coverage:
+            return result
+
+        return best_patch
 
 
 class SourceColorFiller(IslandFiller):

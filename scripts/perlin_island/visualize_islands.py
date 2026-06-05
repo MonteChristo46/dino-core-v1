@@ -19,10 +19,11 @@ import numpy as np
 from PIL import Image
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
+sys.path.insert(0, PROJECT_ROOT)
 
-from synthesis.fillers import DTDTextureFiller
-from synthesis.perlin_island import GammaSizeParams, PerlinIslandGenerator
+from config import GammaSizeParams, PerlinConfig
+from src.synthesis.fillers import DTDTextureFiller
+from src.synthesis.perlin_island import PerlinIslandGenerator
 
 DATASET_ROOT = os.path.join(
     PROJECT_ROOT,
@@ -166,6 +167,8 @@ def compose_island_with_fill(
 
 
 def main():
+    perlin_defaults = PerlinConfig()
+
     parser = argparse.ArgumentParser(description="Visualize Perlin noise islands")
     parser.add_argument(
         "--dataset-root",
@@ -221,12 +224,12 @@ def main():
     print(f"Found {len(categories)} categories (limited to {args.max_categories})")
 
     generator = PerlinIslandGenerator(
-        size_params=GammaSizeParams(),
-        noise_octaves=4,
-        noise_persistence=0.5,
-        noise_lacunarity=2.0,
-        noise_base_res=(8, 8),
-        sea_level_range=(0.05, 0.25),
+        size_params=perlin_defaults.size_params,
+        noise_octaves=perlin_defaults.noise_octaves,
+        noise_persistence=perlin_defaults.noise_persistence,
+        noise_lacunarity=perlin_defaults.noise_lacunarity,
+        noise_base_res=perlin_defaults.noise_base_res,
+        sea_level_range=perlin_defaults.sea_level_range,
         seed=args.seed,
     )
 

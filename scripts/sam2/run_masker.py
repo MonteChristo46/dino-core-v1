@@ -156,7 +156,7 @@ def main():
     parser.add_argument("--stability-score-thresh", type=float, default=0.97)
     parser.add_argument("--crop-n-layers", type=int, default=0)
     parser.add_argument("--min-area-ratio", type=float, default=0.01, help="Min mask area as ratio of image (default: 0.01 = 1%%)")
-    parser.add_argument("--max-area-ratio", type=float, default=0.4)
+    parser.add_argument("--max-area-ratio", type=float, default=0.70)
     parser.add_argument("--dedup-iou", type=float, default=0.95)
     parser.add_argument("--nms-iou-thresh", type=float, default=0.5,
         help="NMS IoU threshold for merging overlapping masks (default: 0.5)")

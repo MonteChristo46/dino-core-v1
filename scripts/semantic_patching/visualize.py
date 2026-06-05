@@ -36,6 +36,7 @@ import numpy as np
 import torch
 from PIL import Image
 from sklearn.decomposition import PCA
+from src.augmentation.blenders import FeatherBlender
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -43,11 +44,13 @@ import matplotlib.pyplot as plt
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
+from config import ClusteringConfig, FillerConfig, PerlinConfig, SAM2Config
 from src.backbones.dinov3 import DinoV3Backbone
 from src.clustering.hdbscan_clusterer import HDBSCANClusterer
 from src.masking.sam2_masker import SAM2Masker
+from src.augmentation.blenders.seamless_clone import SeamlessCloneBlender
 from src.synthesis.patch_composer import PatchComposer
-from src.synthesis.perlin_island import GammaSizeParams, PerlinIslandGenerator
+from src.synthesis.perlin_island import PerlinIslandGenerator
 from src.synthesis.fillers import DTDTextureFiller, SourceTextureFiller
 from src.synthesis.random_composer import DTD_ROOT, RandomPatchComposer
 
@@ -56,13 +59,26 @@ LOGGER = logging.getLogger(__name__)
 
 GRID_SIZE = 14
 
-DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "mvtec_small")
+DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "BigD")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output", "semantic_patching")
+
+#ALL_CATEGORIES = [
+#    "bottle", "cable", "capsule", "carpet", "grid",
+#    "hazelnut", "leather", "metal_nut", "pill", "screw",
+#    "tile", "toothbrush", "transistor", "wood", "zipper",
+#]
+
+#ALL_CATEGORIES = [
+#    "candle", "capsules", "cashew", "chewinggum", "fryum",
+#    "macaroni1", "macaroni2", "pcb1", "pcb2", "pcb3", "pcb4", "pipe_fryum",
+#]
 
 ALL_CATEGORIES = [
     "bottle", "cable", "capsule", "carpet", "grid",
     "hazelnut", "leather", "metal_nut", "pill", "screw",
     "tile", "toothbrush", "transistor", "wood", "zipper",
+    "candle", "capsules", "cashew", "chewinggum", "fryum",
+    "macaroni1", "macaroni2", "pcb1", "pcb2", "pcb3", "pcb4", "pipe_fryum",
 ]
 
 
@@ -346,33 +362,89 @@ def create_no_valid_panel(
 
 
 def main():
+    sam2_defaults = SAM2Config()
+    sam2_defaults = SAM2Config()
+    clustering_defaults = ClusteringConfig()
+    perlin_defaults = PerlinConfig()
+    filler_defaults = FillerConfig()
+
     parser = argparse.ArgumentParser(description="Semantic patching visualization")
     parser.add_argument("--categories", nargs="*", default=None,
                         help="Specific categories to process (default: all)")
     parser.add_argument("--dataset-root", default=DATASET_ROOT)
     parser.add_argument("--output-dir", default=OUTPUT_DIR)
-    parser.add_argument("--device", default="cuda", choices=["cpu", "cuda", "mps"])
-    parser.add_argument("--sam2-model-size", default="large",
+    parser.add_argument("--device", default=sam2_defaults.device, choices=["cpu", "cuda", "mps"])
+    parser.add_argument("--sam2-model-size", default=sam2_defaults.model_size,
                         choices=["tiny", "small", "base_plus", "large"])
-    parser.add_argument("--sam2-min-area-ratio", type=float, default=0.02,
-                        help="Min mask area as ratio of image (default: 0.02)")
-    parser.add_argument("--sam2-max-area-ratio", type=float, default=0.50,
-                        help="Max mask area as ratio of image (default: 0.35)")
-    parser.add_argument("--sam2-pred-iou", type=float, default=0.70,
-                        help="SAM2 pred_iou_thresh (default: 0.88)")
-    parser.add_argument("--sam2-stability", type=float, default=0.8,
-                        help="SAM2 stability_score_thresh (default: 0.95)")
+    parser.add_argument("--sam2-min-area-ratio", type=float, default=sam2_defaults.min_area_ratio,
+                        help="Min mask area as ratio of image")
+    parser.add_argument("--sam2-max-area-ratio", type=float, default=sam2_defaults.max_area_ratio,
+                        help="Max mask area as ratio of image")
+    parser.add_argument("--sam2-pred-iou", type=float, default=sam2_defaults.pred_iou_thresh,
+                        help="SAM2 pred_iou_thresh")
+    parser.add_argument("--sam2-stability", type=float, default=sam2_defaults.stability_score_thresh,
+                        help="SAM2 stability_score_thresh")
     parser.add_argument("--dinov3-size", default="vitl",
                         choices=["vits", "vitsplus", "vitb", "vitl", "vithplus"])
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fill-strategy", choices=["source", "dtd"], default="source",
-                        help="Fill strategy for Perlin island (default: dtd)")
+                        help="Fill strategy for Perlin island")
     parser.add_argument("--dtd-root", default=DTD_ROOT,
                         help="Path to DTD images directory (used when --fill-strategy=dtd)")
+    parser.add_argument(
+        "--dtd-mix-prob",
+        type=float,
+        default=filler_defaults.dtd_mix_prob,
+        help="Probability of using DTD fill instead of source fill in semantic mode",
+    )
     args = parser.parse_args()
 
     categories = args.categories if args.categories else ALL_CATEGORIES
     os.makedirs(args.output_dir, exist_ok=True)
+
+    LOGGER.info("=" * 64)
+    LOGGER.info("Configuration")
+    LOGGER.info("=" * 64)
+    LOGGER.info("  categories: %s", categories)
+    LOGGER.info("  dataset_root: %s", args.dataset_root)
+    LOGGER.info("  output_dir: %s", args.output_dir)
+    LOGGER.info("  device: %s", args.device)
+    LOGGER.info("  seed: %d", args.seed)
+    LOGGER.info("  dinov3_size: %s", args.dinov3_size)
+    LOGGER.info("  fill_strategy: %s", args.fill_strategy)
+    LOGGER.info("  dtd_mix_prob: %.3f", args.dtd_mix_prob)
+    LOGGER.info("  blender: seamless_clone (mode=mixed)")
+    LOGGER.info("")
+    LOGGER.info("  SAM2:")
+    LOGGER.info("    model_size: %s", args.sam2_model_size)
+    LOGGER.info("    min_area_ratio: %.4f", args.sam2_min_area_ratio)
+    LOGGER.info("    max_area_ratio: %.4f", args.sam2_max_area_ratio)
+    LOGGER.info("    pred_iou_thresh: %.4f", args.sam2_pred_iou)
+    LOGGER.info("    stability_score_thresh: %.4f", args.sam2_stability)
+    LOGGER.info("    fallback_stability_thresholds: [0.70]")
+    LOGGER.info("")
+    LOGGER.info("  Clustering:")
+    LOGGER.info("    min_cluster_size: %d", clustering_defaults.min_cluster_size)
+    LOGGER.info("    min_samples: %s", clustering_defaults.min_samples)
+    LOGGER.info("    cluster_selection_epsilon: %.4f", clustering_defaults.cluster_selection_epsilon)
+    LOGGER.info("    metric: %s", clustering_defaults.metric)
+    LOGGER.info("    umap_dims: %d", clustering_defaults.umap_dims)
+    LOGGER.info("    umap_n_neighbors: %d", clustering_defaults.umap_n_neighbors)
+    LOGGER.info("    umap_min_dist: %.4f", clustering_defaults.umap_min_dist)
+    LOGGER.info("")
+    LOGGER.info("  Perlin:")
+    LOGGER.info("    size_params: shape=%.4f, scale=%.4f, min_ratio=%.4f, max_ratio=%.4f",
+                perlin_defaults.size_params.shape,
+                perlin_defaults.size_params.scale,
+                perlin_defaults.size_params.min_ratio,
+                perlin_defaults.size_params.max_ratio)
+    LOGGER.info("    noise_octaves: %d", perlin_defaults.noise_octaves)
+    LOGGER.info("    noise_persistence: %.4f", perlin_defaults.noise_persistence)
+    LOGGER.info("    noise_lacunarity: %.4f", perlin_defaults.noise_lacunarity)
+    LOGGER.info("    noise_base_res: %s", perlin_defaults.noise_base_res)
+    LOGGER.info("    sea_level_range: %s", perlin_defaults.sea_level_range)
+    LOGGER.info("    gradient_types: %s", perlin_defaults.gradient_types)
+    LOGGER.info("=" * 64)
 
     LOGGER.info("Loading models...")
     sam2_weights = os.path.join(PROJECT_ROOT, "weights", "sam2")
@@ -394,30 +466,36 @@ def main():
     backbone.eval()
 
     clusterer = HDBSCANClusterer(
-        min_cluster_size=3,
-        min_samples=None,
-        cluster_selection_epsilon=0.0,
-        metric="euclidean",
-        umap_dims=20,
-        umap_n_neighbors=15,
-        umap_min_dist=0.0,
+        min_cluster_size=clustering_defaults.min_cluster_size,
+        min_samples=clustering_defaults.min_samples,
+        cluster_selection_epsilon=clustering_defaults.cluster_selection_epsilon,
+        metric=clustering_defaults.metric,
+        umap_dims=clustering_defaults.umap_dims,
+        umap_n_neighbors=clustering_defaults.umap_n_neighbors,
+        umap_min_dist=clustering_defaults.umap_min_dist,
     )
 
     island_gen = PerlinIslandGenerator(
-        size_params=GammaSizeParams(),
-        noise_octaves=4,
-        noise_persistence=0.5,
-        noise_lacunarity=2.0,
-        noise_base_res=(8, 8),
-        sea_level_range=(0.05, 0.25),
+        size_params=perlin_defaults.size_params,
+        noise_octaves=perlin_defaults.noise_octaves,
+        noise_persistence=perlin_defaults.noise_persistence,
+        noise_lacunarity=perlin_defaults.noise_lacunarity,
+        noise_base_res=perlin_defaults.noise_base_res,
+        sea_level_range=perlin_defaults.sea_level_range,
         seed=args.seed,
     )
 
-    filler = DTDTextureFiller(args.dtd_root, seed=args.seed) if args.fill_strategy == "dtd" else SourceTextureFiller()
+    dtd_mix_prob = float(np.clip(args.dtd_mix_prob, 0.0, 1.0))
+    dtd_filler = DTDTextureFiller(args.dtd_root, seed=args.seed)
+    filler = dtd_filler if args.fill_strategy == "dtd" else SourceTextureFiller()
+    blender = FeatherBlender(20, 0.5)
 
     composer = PatchComposer(
         island_generator=island_gen,
+        blender=blender,
         filler=filler,
+        dtd_filler=(dtd_filler if args.fill_strategy == "source" else None),
+        dtd_mix_prob=(dtd_mix_prob if args.fill_strategy == "source" else 0.0),
         seed=args.seed,
     )
     random_composer = RandomPatchComposer(
@@ -457,7 +535,7 @@ def main():
         pca_rgb = visualize_pca_features(features_2d, mask_14)
         cluster_rgb = visualize_clustering(clustering, mask_14)
 
-        is_valid = coverage >= 0.05 and len(clustering.unique_clusters) >= 2
+        is_valid = coverage >= sam2_defaults.min_area_ratio and len(clustering.unique_clusters) >= 2
 
         if is_valid:
             valid_count += 1

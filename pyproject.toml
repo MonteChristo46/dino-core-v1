@@ -21,11 +21,14 @@ dependencies = [
     "umap-learn>=0.5.5",
     "sam2>=1.0.0",
     "sam3 @ git+https://github.com/facebookresearch/sam3.git",
+    "einops>=0.8.0",
+    "pycocotools>=2.0.0",
     "rfdetr>=1.0.0",
     "cuml-cu12>=25.6.0",
     "opensimplex>=0.4.5.1",
     "optuna>=3.5.0",
     "optuna-dashboard>=0.17.0",
+    "faiss-cpu>=1.7.0",
 ]
 
 [tool.uv]

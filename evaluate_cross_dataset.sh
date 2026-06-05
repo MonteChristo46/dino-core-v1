@@ -7,8 +7,8 @@ set -euo pipefail
 # =============================================================================
 
 # Configurable paths
-MODEL_ROOT="${MODEL_ROOT:-results/IM384_SAv4_dinov3_vitb_L4-12_P0/1_D768-768_PS-1_AN-9_S0}"
-EVAL_DATASET_PATH="${EVAL_DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/mvtec_small}"
+MODEL_ROOT="${MODEL_ROOT:-results/IM384_VSAv6_dinov3_vitb_L4-12_P0/1_D768-768_PS-1_AN-9_S0}"
+EVAL_DATASET_PATH="${EVAL_DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/VisA_pytorch}"
 
 # Evaluation configuration
 GPU_ID="${GPU_ID:-0}"

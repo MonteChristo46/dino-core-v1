@@ -6,7 +6,7 @@ set -euo pipefail
 # =============================================================================
 
 # Configurable dataset path (MVTec AD format)
-DATASET_PATH="${DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/visa_synthetic_anomalies_v5}"
+DATASET_PATH="${DATASET_PATH:-/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/BigD_synthetic_anomalies_v7}"
 
 # Training configuration
 GPU_ID="${GPU_ID:-0}"

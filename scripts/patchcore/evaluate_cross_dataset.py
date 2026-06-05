@@ -200,8 +200,8 @@ def run(
         with device_context:
             torch.cuda.empty_cache()
 
-            #nn_method = patchcore.common.FaissNN(False, 4)
-            nn_method = patchcore.common.ApproximateFaissNN(on_gpu=True)
+            nn_method = patchcore.common.FaissNN(False, 8)
+            #nn_method = patchcore.common.ApproximateFaissNN(on_gpu=False)
             patchcore_instance = patchcore.patchcore.PatchCore(device)
             patchcore_instance.load_from_path(
                 load_path=model_path, device=device, nn_method=nn_method
