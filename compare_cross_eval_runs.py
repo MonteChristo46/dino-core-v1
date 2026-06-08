@@ -142,7 +142,7 @@ def plot_threshold_delta_grouped(run_data_list, categories, output_dir):
     labels = wrap_labels(categories)
     max_len = max(len(c) for c in categories)
     max_model_len = max(len(model_label(rd["model"])) for rd in run_data_list) if run_data_list else 20
-    fig_width = max(12, n_cats * max(1.5, max_len * 0.12), max_model_len * 0.6)
+    fig_width = max(12, n_cats * max(1.5, max_len * 0.12), max_model_len * 0.12 * 10)
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, 6))
 
     x = np.arange(n_cats)
@@ -184,7 +184,7 @@ def plot_delta_lines(run_data_list, categories, output_dir):
     labels = wrap_labels(categories)
     max_len = max(len(c) for c in categories)
     max_model_len = max(len(model_label(rd["model"])) for rd in run_data_list) if run_data_list else 20
-    fig_width = max(12, len(categories) * max(1.5, max_len * 0.12), max_model_len * 0.6)
+    fig_width = max(12, len(categories) * max(1.5, max_len * 0.12), max_model_len * 0.12 * 10)
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, 6))
 
     x = np.arange(len(categories))
@@ -203,10 +203,11 @@ def plot_delta_lines(run_data_list, categories, output_dir):
     ax.set_title("Signed Threshold Delta per Model", fontsize=16)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=0, ha="center", fontsize=9)
-    ax.legend(fontsize=9)
+    ax.legend(fontsize=9, loc="upper left", bbox_to_anchor=(1.01, 1))
     ax.grid(True, axis="y", alpha=0.3)
 
     plt.tight_layout()
+    fig.subplots_adjust(right=0.7)
     save_plot(fig, output_dir, "delta_lines")
     plt.close()
 
@@ -215,7 +216,7 @@ def plot_auroc_lines(run_data_list, categories, output_dir):
     labels = wrap_labels(categories)
     max_len = max(len(c) for c in categories)
     max_model_len = max(len(model_label(rd["model"])) for rd in run_data_list) if run_data_list else 20
-    fig_width = max(12, len(categories) * max(1.5, max_len * 0.12), max_model_len * 0.6)
+    fig_width = max(12, len(categories) * max(1.5, max_len * 0.12), max_model_len * 0.12 * 10)
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, 6))
 
     x = np.arange(len(categories))
@@ -233,18 +234,19 @@ def plot_auroc_lines(run_data_list, categories, output_dir):
     ax.set_title("Instance AUROC Transfer per Model", fontsize=16)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=0, ha="center", fontsize=9)
-    ax.legend(fontsize=9)
+    ax.legend(fontsize=9, loc="upper left", bbox_to_anchor=(1.01, 1))
     ax.set_ylim([0.7, 1.02])
     ax.grid(True, axis="y", alpha=0.3)
 
     plt.tight_layout()
+    fig.subplots_adjust(right=0.7)
     save_plot(fig, output_dir, "auroc_lines")
     plt.close()
 
 
 def plot_threshold_scatter(run_data_list, output_dir):
     max_model_len = max(len(model_label(rd["model"])) for rd in run_data_list) if run_data_list else 20
-    fig_width = max(10, max_model_len * 0.5)
+    fig_width = max(10, max_model_len * 0.12 * 10)
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, 7))
 
     all_saved = []
@@ -270,10 +272,11 @@ def plot_threshold_scatter(run_data_list, output_dir):
     ax.set_title("Saved vs Computed Threshold (colored by model)", fontsize=15)
     ax.set_xlim([lim_min, lim_max])
     ax.set_ylim([lim_min, lim_max])
-    ax.legend(fontsize=9)
+    ax.legend(fontsize=9, loc="upper left", bbox_to_anchor=(1.01, 1))
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
+    fig.subplots_adjust(right=0.75)
     save_plot(fig, output_dir, "threshold_scatter")
     plt.close()
 
@@ -285,8 +288,9 @@ def _plot_metric_heatmap(run_data_list, categories, metric_key, metric_label, ou
     labels = wrap_labels(categories, max_width=10)
 
     max_model_len = max(len(m) for m in model_names) if model_names else 20
-    fig_width = max(14, len(categories) * 1.2, max_model_len * 0.55)
-    fig_height = max(4, len(model_names) * 0.6)
+    # Width: ensure long model names fit without truncation
+    fig_width = max(14, len(categories) * 1.5, max_model_len * 0.12 * 10)
+    fig_height = max(4, len(model_names) * 1.0)
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
 
     im = ax.imshow(matrix, cmap="RdYlGn", aspect="auto", vmin=0, vmax=1)
@@ -302,6 +306,7 @@ def _plot_metric_heatmap(run_data_list, categories, metric_key, metric_label, ou
     ax.set_xticklabels(labels, fontsize=10, rotation=45, ha="right")
     ax.set_yticks(np.arange(len(model_names)))
     ax.set_yticklabels(model_names, fontsize=10)
+    plt.setp(ax.get_yticklabels(), ha="right", va="center")
 
     ax.set_xlabel("Category", fontsize=14, fontweight="bold")
     ax.set_ylabel("Model", fontsize=14, fontweight="bold")
@@ -310,7 +315,10 @@ def _plot_metric_heatmap(run_data_list, categories, metric_key, metric_label, ou
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label(metric_label, fontsize=12)
 
-    plt.tight_layout()
+    # Reserve space for y-axis labels using tight_layout rect parameter
+    # rect=[left, bottom, right, top] in figure coordinates
+    left_reserve = min(0.5, max(0.25, max_model_len * 0.015))
+    fig.tight_layout(rect=[left_reserve, 0, 1, 1])
     save_plot(fig, output_dir, filename)
     plt.close()
 
@@ -330,8 +338,9 @@ def plot_f1_heatmap(run_data_list, categories, output_dir):
 def plot_delta_boxplot(run_data_list, output_dir):
     labels = [model_label(rd["model"]) for rd in run_data_list]
     max_label_len = max(len(l) for l in labels) if labels else 20
-    fig_width = max(10, len(run_data_list) * 3, max_label_len * 0.5)
-    fig, ax = plt.subplots(1, 1, figsize=(fig_width, 6))
+    fig_width = max(10, len(run_data_list) * 3, max_label_len * 0.12 * 10)
+    fig_height = 6 + (max_label_len > 30) * 1.5
+    fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
 
     deltas = [rd["abs_delta"] for rd in run_data_list]
 
@@ -358,7 +367,14 @@ def plot_delta_boxplot(run_data_list, output_dir):
     ax.set_title("Threshold Drift Distribution per Model\n(red diamond = mean)", fontsize=15)
     ax.grid(True, axis="y", alpha=0.3)
 
+    # Rotate x labels if they are long
+    if max_label_len > 25:
+        plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+
     plt.tight_layout()
+    # Extra bottom margin for rotated labels
+    if max_label_len > 25:
+        fig.subplots_adjust(bottom=0.25)
     save_plot(fig, output_dir, "delta_boxplot")
     plt.close()
 

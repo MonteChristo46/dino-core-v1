@@ -7,8 +7,8 @@ set -euo pipefail
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESULTS_BASE="${SCRIPT_DIR}/results/CrossEvalVisa"
-OUTPUT_DIR="${RESULTS_BASE}/cross_eval_comparison/visa"
+RESULTS_BASE="${SCRIPT_DIR}/results/CrossEvalBigD"
+OUTPUT_DIR="${RESULTS_BASE}/cross_eval_comparison/"
 
 # Activate virtual environment
 VENV_DIR="${SCRIPT_DIR}/.venv"
