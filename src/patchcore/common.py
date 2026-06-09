@@ -12,6 +12,12 @@ import torch.nn.functional as F
 
 from patchcore.dinov3 import DinoV3Backbone
 
+import sys
+import os as _os
+
+sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
+from backbones.swin_transformer_v2 import SwinTransformerV2Backbone
+
 
 class FaissNN(object):
     def __init__(self, on_gpu: bool = False, num_workers: int = 4) -> None:
@@ -228,6 +234,7 @@ class NetworkFeatureAggregator(torch.nn.Module):
         self.backbone = backbone
         self.device = device
         self._is_dinov3_backbone = bool(getattr(backbone, "is_dinov3", False))
+        self._is_swin_backbone = bool(getattr(backbone, "is_swin", False))
         if not hasattr(backbone, "hook_handles"):
             self.backbone.hook_handles = []
         for handle in self.backbone.hook_handles:
@@ -235,6 +242,11 @@ class NetworkFeatureAggregator(torch.nn.Module):
         self.outputs = {}
 
         if self._is_dinov3_backbone:
+            self.to(self.device)
+            return
+
+        if self._is_swin_backbone:
+            self._register_swin_hooks()
             self.to(self.device)
             return
 
@@ -263,6 +275,29 @@ class NetworkFeatureAggregator(torch.nn.Module):
                 )
         self.to(self.device)
 
+    def _register_swin_hooks(self):
+        swin_model = self.backbone.model
+        has_layers = hasattr(swin_model, "layers")
+        has_stages = hasattr(swin_model, "stages")
+
+        for layer_idx in self.layers_to_extract_from:
+            stage_idx = int(layer_idx)
+
+            def make_hook(idx):
+                def hook(module, input, output):
+                    self.outputs[idx] = output
+                return hook
+
+            if has_layers:
+                target = swin_model.layers[stage_idx]
+            elif has_stages:
+                target = swin_model.stages[stage_idx]
+            else:
+                continue
+            self.backbone.hook_handles.append(
+                target.register_forward_hook(make_hook(layer_idx))
+            )
+
     def forward(self, images):
         self.outputs.clear()
         if self._is_dinov3_backbone:
@@ -279,9 +314,17 @@ class NetworkFeatureAggregator(torch.nn.Module):
                 )
             return self.outputs
 
+        if self._is_swin_backbone:
+            with torch.no_grad():
+                _ = self.backbone(images)
+            for layer_idx in self.layers_to_extract_from:
+                raw_feat = self.outputs[layer_idx]
+                self.outputs[layer_idx] = SwinTransformerV2Backbone.format_to_spatial_grid(
+                    raw_feat
+                )
+            return self.outputs
+
         with torch.no_grad():
-            # The backbone will throw an Exception once it reached the last
-            # layer to compute features from. Computation will stop there.
             try:
                 _ = self.backbone(images)
             except LastLayerToExtractReachedException:

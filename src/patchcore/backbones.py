@@ -1,3 +1,4 @@
+import sys
 import os
 
 import timm  # noqa
@@ -5,6 +6,9 @@ import torch
 import torchvision.models as models  # noqa
 
 from patchcore.dinov3 import DinoV3Backbone
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from backbones.swin_transformer_v2 import SwinTransformerV2Backbone
 
 _BACKBONES = {
     "alexnet": "models.alexnet(pretrained=False)",
@@ -84,6 +88,10 @@ def _resolve_dinov3_weights_dir(name):
 def load(name):
     if "dinov3" in name.lower():
         return DinoV3Backbone(weights_dir=_resolve_dinov3_weights_dir(name))
+
+    if "swinv2" in name.lower() or "swin" in name.lower():
+        swin_name = "swinv2_base" if "large" not in name.lower() else "swinv2_large"
+        return SwinTransformerV2Backbone(name=swin_name, pretrained=True)
 
     weight_path = _resolve_torchvision_weights(name)
     if weight_path and os.path.exists(weight_path):
