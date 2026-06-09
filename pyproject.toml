@@ -29,6 +29,7 @@ dependencies = [
     "optuna>=3.5.0",
     "optuna-dashboard>=0.17.0",
     "faiss-cpu>=1.7.0",
+    "gradio>=5.36.2",
 ]
 
 [tool.uv]
