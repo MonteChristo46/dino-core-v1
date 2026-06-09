@@ -415,7 +415,8 @@ def run(
 
 @main.command("cross_eval")
 @click.option("--model_root", type=str, required=True, help="Path to training results containing models/ and curves/")
-def cross_eval(model_root):
+@click.option("--model_name", type=str, required=True, help="Explicit model name for CSV output")
+def cross_eval(model_root, model_name):
     model_dir = os.path.join(model_root, "models")
     curves_dir = os.path.join(model_root, "curves")
 
@@ -425,8 +426,6 @@ def cross_eval(model_root):
     if not os.path.isdir(curves_dir):
         LOGGER.error(f"Curves directory not found: {curves_dir}")
         sys.exit(1)
-
-    model_name = os.path.basename(os.path.normpath(model_root))
 
     model_paths = {}
     thresholds = {}

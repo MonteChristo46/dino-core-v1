@@ -26,6 +26,9 @@ PALETTE = [
 ]
 
 
+import re
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="PatchCore Cross-Eval Run Comparison")
     parser.add_argument("--runs", nargs="+", required=True,
@@ -60,11 +63,12 @@ def get_category(row):
     return ""
 
 
-def get_model_name(row):
-    for key in ("Model", "model"):
-        if key in row:
-            return row[key].strip()
-    return ""
+def extract_model_from_dir(run_dir):
+    dir_name = Path(run_dir).name
+    match = re.match(r"^CrossEval_\d{8}_\d+_(.+)$", dir_name)
+    if match:
+        return match.group(1)
+    return dir_name
 
 
 def wrap_labels(labels, max_width=12):
@@ -77,12 +81,8 @@ def compute_figsize(n_categories, max_label_len, bar_groups=2):
     return (width, height)
 
 
-def model_label(name):
-    return name.replace("__", " / ")
 
-
-
-def load_run_data(run_dir):
+def load_run_data(run_dir, model_name):
     results_path = Path(run_dir) / "results.csv"
     if not results_path.exists():
         LOGGER.warning(f"results.csv not found in {run_dir}, skipping.")
@@ -98,13 +98,10 @@ def load_run_data(run_dir):
     precision = []
     recall = []
 
-    model_name = ""
     for row in rows:
         cat = get_category(row)
         if cat == "Mean" or not cat:
             continue
-        if not model_name:
-            model_name = get_model_name(row)
         try:
             categories.append(cat)
             saved.append(float(row["saved_threshold"]))
@@ -141,7 +138,7 @@ def plot_threshold_delta_grouped(run_data_list, categories, output_dir):
     n_cats = len(categories)
     labels = wrap_labels(categories)
     max_len = max(len(c) for c in categories)
-    max_model_len = max(len(model_label(rd["model"])) for rd in run_data_list) if run_data_list else 20
+    max_model_len = max(len(rd["model"]) for rd in run_data_list) if run_data_list else 20
     fig_width = max(12, n_cats * max(1.5, max_len * 0.12), max_model_len * 0.12 * 10)
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, 6))
 
@@ -151,7 +148,7 @@ def plot_threshold_delta_grouped(run_data_list, categories, output_dir):
     for i, rd in enumerate(run_data_list):
         offset = (i - (n_models - 1) / 2) * width
         bars = ax.bar(x + offset, rd["abs_delta"], width,
-                      label=model_label(rd["model"]), color=PALETTE[i % len(PALETTE)], alpha=0.85)
+                      label=rd["model"], color=PALETTE[i % len(PALETTE)], alpha=0.85)
         for bar in bars:
             height = bar.get_height()
             ax.annotate(f"{height:.3f}",
@@ -162,7 +159,7 @@ def plot_threshold_delta_grouped(run_data_list, categories, output_dir):
     for i, rd in enumerate(run_data_list):
         color = PALETTE[i % len(PALETTE)]
         ax.plot(x, rd["delta"], "o-", color=color, linewidth=1.5, markersize=4,
-                alpha=0.35, zorder=3, label=f"{model_label(rd['model'])} Δ (signed)")
+                alpha=0.35, zorder=3, label=f"{rd['model']} Δ (signed)")
 
     ax.axhline(0, color="gray", linewidth=1, linestyle="--", alpha=0.5)
 
@@ -183,7 +180,7 @@ def plot_threshold_delta_grouped(run_data_list, categories, output_dir):
 def plot_delta_lines(run_data_list, categories, output_dir):
     labels = wrap_labels(categories)
     max_len = max(len(c) for c in categories)
-    max_model_len = max(len(model_label(rd["model"])) for rd in run_data_list) if run_data_list else 20
+    max_model_len = max(len(rd["model"]) for rd in run_data_list) if run_data_list else 20
     fig_width = max(12, len(categories) * max(1.5, max_len * 0.12), max_model_len * 0.12 * 10)
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, 6))
 
@@ -192,7 +189,7 @@ def plot_delta_lines(run_data_list, categories, output_dir):
     for i, rd in enumerate(run_data_list):
         color = PALETTE[i % len(PALETTE)]
         ax.plot(x, rd["delta"], "o-", color=color, linewidth=2.5, markersize=7,
-                label=model_label(rd["model"]))
+                label=rd["model"])
         for xi, yi in zip(x, rd["delta"]):
             ax.annotate(f"{yi:+.3f}", xy=(xi, yi), xytext=(0, 6),
                         textcoords="offset points", ha="center", fontsize=7, color=color)
@@ -215,7 +212,7 @@ def plot_delta_lines(run_data_list, categories, output_dir):
 def plot_auroc_lines(run_data_list, categories, output_dir):
     labels = wrap_labels(categories)
     max_len = max(len(c) for c in categories)
-    max_model_len = max(len(model_label(rd["model"])) for rd in run_data_list) if run_data_list else 20
+    max_model_len = max(len(rd["model"]) for rd in run_data_list) if run_data_list else 20
     fig_width = max(12, len(categories) * max(1.5, max_len * 0.12), max_model_len * 0.12 * 10)
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, 6))
 
@@ -224,7 +221,7 @@ def plot_auroc_lines(run_data_list, categories, output_dir):
     for i, rd in enumerate(run_data_list):
         color = PALETTE[i % len(PALETTE)]
         ax.plot(x, rd["instance_auroc"], "o-", color=color, linewidth=2, markersize=7,
-                label=model_label(rd["model"]))
+                label=rd["model"])
         for xi, yi in zip(x, rd["instance_auroc"]):
             ax.annotate(f"{yi:.2f}", xy=(xi, yi), xytext=(0, 5),
                         textcoords="offset points", ha="center", fontsize=7, color=color)
@@ -245,7 +242,7 @@ def plot_auroc_lines(run_data_list, categories, output_dir):
 
 
 def plot_threshold_scatter(run_data_list, output_dir):
-    max_model_len = max(len(model_label(rd["model"])) for rd in run_data_list) if run_data_list else 20
+    max_model_len = max(len(rd["model"]) for rd in run_data_list) if run_data_list else 20
     fig_width = max(10, max_model_len * 0.12 * 10)
     fig, ax = plt.subplots(1, 1, figsize=(fig_width, 7))
 
@@ -256,7 +253,7 @@ def plot_threshold_scatter(run_data_list, output_dir):
         color = PALETTE[i % len(PALETTE)]
         ax.scatter(rd["saved_threshold"], rd["computed_threshold"],
                    c=color, s=80, alpha=0.8, edgecolors="white", linewidth=1,
-                   label=model_label(rd["model"]), zorder=5)
+                   label=rd["model"], zorder=5)
         all_saved.extend(rd["saved_threshold"].tolist())
         all_computed.extend(rd["computed_threshold"].tolist())
 
@@ -282,7 +279,7 @@ def plot_threshold_scatter(run_data_list, output_dir):
 
 
 def _plot_metric_heatmap(run_data_list, categories, metric_key, metric_label, output_dir, filename):
-    model_names = [model_label(rd["model"]) for rd in run_data_list]
+    model_names = [rd["model"] for rd in run_data_list]
     matrix = np.array([rd[metric_key] for rd in run_data_list])
 
     labels = wrap_labels(categories, max_width=10)
@@ -336,7 +333,7 @@ def plot_f1_heatmap(run_data_list, categories, output_dir):
 
 
 def plot_delta_boxplot(run_data_list, output_dir):
-    labels = [model_label(rd["model"]) for rd in run_data_list]
+    labels = [rd["model"] for rd in run_data_list]
     max_label_len = max(len(l) for l in labels) if labels else 20
     fig_width = max(10, len(run_data_list) * 3, max_label_len * 0.12 * 10)
     fig_height = 6 + (max_label_len > 30) * 1.5
@@ -388,7 +385,8 @@ def main():
 
     run_data_list = []
     for run_dir in args.runs:
-        rd = load_run_data(run_dir)
+        model_name = extract_model_from_dir(run_dir)
+        rd = load_run_data(run_dir, model_name)
         if rd is not None:
             run_data_list.append(rd)
             LOGGER.info(f"Loaded {rd['model']}: {len(rd['categories'])} categories")

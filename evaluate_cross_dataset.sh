@@ -102,6 +102,7 @@ python "${SCRIPT_DIR}/scripts/patchcore/evaluate_cross_dataset.py" \
     "${RESULTS_BASE}" \
     cross_eval \
         --model_root "${MODEL_ROOT}" \
+        --model_name "${MODEL_NAME}" \
     dataset \
         --resize "${RESIZE}" \
         --imagesize "${IMAGE_SIZE}" \
