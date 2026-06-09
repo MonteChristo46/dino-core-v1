@@ -1,0 +1,22 @@
+FROM nvcr.io/nvidia/tritonserver:25.12-py3
+
+# Install system dependencies for FAISS and Python packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas-dev \
+    libomp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies for the Python backend scorer
+RUN pip install --no-cache-dir \
+    faiss-cpu \
+    numpy \
+    scipy
+
+# Install ONNX Runtime GPU for the extractor backend
+RUN pip install --no-cache-dir \
+    onnxruntime-gpu
+
+# Copy model repository
+COPY model_repository /models
+
+CMD ["tritonserver", "--model-repository=/models"]
