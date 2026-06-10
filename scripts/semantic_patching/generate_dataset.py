@@ -50,7 +50,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 LOGGER = logging.getLogger(__name__)
 
 DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "BigD")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "BigD_synthetic_anomalies_v7")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "BigD_synthetic_anomalies_v8")
 
 ALL_CATEGORIES = [
     "candle", "capsules", "cashew", "chewinggum", "fryum",
