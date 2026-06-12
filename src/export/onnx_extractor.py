@@ -186,7 +186,6 @@ def export_to_onnx(
             input_names=["IMAGE"],
             output_names=["FEATURES", "PATCH_SHAPES"],
             dynamic_axes={
-                "IMAGE": {0: "batch_size", 2: "height", 3: "width"},
                 "FEATURES": {0: "num_features"},
             },
         )
