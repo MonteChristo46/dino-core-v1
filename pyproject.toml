@@ -32,7 +32,7 @@ dependencies = [
     "onnxscript>=0.1.0.dev20240701",
     "onnx>=1.16.0",
     "gradio>=5.36.2",
-    "tritonclient[http]>=2.41.0",
+    "tritonclient[grpc]>=2.41.0",
 ]
 
 [tool.uv]

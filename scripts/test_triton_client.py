@@ -1,8 +1,8 @@
-"""Integration test for DinoCoreTritonClient against the docker-compose Triton server.
+"""Integration test for DinoCoreTritonClient (gRPC) against docker-compose Triton.
 
 Usage:
-    PYTHONPATH=. python scripts/test_triton_client.py
-    PYTHONPATH=. python scripts/test_triton_client.py --threshold 0.5
+    PYTHONPATH=. .venv/bin/python scripts/test_triton_client.py
+    PYTHONPATH=. .venv/bin/python scripts/test_triton_client.py --threshold 0.5
 """
 
 import argparse
@@ -14,45 +14,70 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 from PIL import Image
 
-from src.triton import DinoCoreTritonClient, DinoCoreTritonSettings
+from src.triton.models import AnomalyResult
+from src.triton.preprocessing import preprocess_image
+import tritonclient.grpc as grpcclient
 
 
 def test_client(url: str, category: str, image_size: int, threshold: float):
     ensemble_name = f"patchcore_ensemble_{category}"
-    settings = DinoCoreTritonSettings(url=url)
-    client = DinoCoreTritonClient(settings)
 
-    # Check liveness
-    print(f"Testing connection to Triton at {url}...")
-    if not client.is_active(model_name=ensemble_name):
-        print(f"FAIL: Model '{ensemble_name}' is not ready or server is down.")
+    print(f"Connecting to Triton gRPC at {url}...")
+    client = grpcclient.InferenceServerClient(url=url)
+
+    if not client.is_server_live():
+        print("FAIL: Triton server is not live.")
         return False
-    print(f"OK: Model '{ensemble_name}' is ready.")
 
-    # Create dummy image
-    dummy_image = np.random.randint(0, 256, (image_size, image_size, 3), dtype=np.uint8)
-    pil_image = Image.fromarray(dummy_image)
+    if not client.is_model_ready(ensemble_name):
+        print(f"FAIL: Model '{ensemble_name}' is not ready.")
+        return False
 
-    # Run inference
-    print(f"\nRunning predict() on '{ensemble_name}' with image_size={image_size}...")
-    result = client.predict(
-        pil_image,
-        model_name=ensemble_name,
-        image_size=(image_size, image_size),
-        threshold=threshold,
+    print(f"OK: Model '{ensemble_name}' is ready.\n")
+
+    dummy_image = Image.fromarray(
+        np.random.randint(0, 256, (image_size, image_size, 3), dtype=np.uint8)
     )
 
+    input_tensor = preprocess_image(dummy_image, target_size=(image_size, image_size))
+
+    inputs = [grpcclient.InferInput("IMAGE", input_tensor.shape, "FP32")]
+    inputs[0].set_data_from_numpy(input_tensor)
+
+    outputs = [
+        grpcclient.InferRequestedOutput("SCORE"),
+        grpcclient.InferRequestedOutput("MASK"),
+    ]
+
+    print(f"Running inference on '{ensemble_name}'...")
+    response = client.infer(ensemble_name, inputs=inputs, outputs=outputs)
+
+    anomaly_score = float(response.as_numpy("SCORE")[0])
+    anomaly_map = response.as_numpy("MASK")
+    if anomaly_map.ndim == 4:
+        anomaly_map = np.squeeze(anomaly_map, axis=0)
+
+    is_anomalous = bool(anomaly_score > threshold) if threshold is not None else False
+
     print(f"\nResult:")
-    print(f"  anomaly_score: {result.anomaly_score:.6f}")
-    print(f"  anomaly_map shape: {result.anomaly_map.shape}")
-    print(f"  is_anomalous: {result.is_anomalous} (threshold={threshold})")
+    print(f"  anomaly_score: {anomaly_score:.6f}")
+    print(f"  anomaly_map shape: {anomaly_map.shape}")
+    print(f"  is_anomalous: {is_anomalous} (threshold={threshold})")
 
     expected_shape = (1, image_size, image_size)
-    if result.anomaly_map.shape == expected_shape:
-        print(f"  Mask shape OK: {result.anomaly_map.shape}")
+    if anomaly_map.shape == expected_shape:
+        print(f"  Mask shape OK: {anomaly_map.shape}")
     else:
-        print(f"  WARNING: expected mask shape {expected_shape}, got {result.anomaly_map.shape}")
+        print(f"  WARNING: expected {expected_shape}, got {anomaly_map.shape}")
         return False
+
+    # Build AnomalyResult (same structure as the shared package)
+    result = AnomalyResult(
+        anomaly_score=anomaly_score,
+        anomaly_map=anomaly_map,
+        is_anomalous=is_anomalous,
+    )
+    print(f"\n  repr: {result}")
 
     print("\nAll checks passed.")
     return True
@@ -60,35 +85,15 @@ def test_client(url: str, category: str, image_size: int, threshold: float):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Test DinoCoreTritonClient against running Triton server"
+        description="Test DinoCoreTritonClient (gRPC) against running Triton server"
     )
-    parser.add_argument(
-        "--url",
-        default="localhost:8003",
-        help="Triton HTTP URL (default: localhost:8000)",
-    )
-    parser.add_argument(
-        "--category",
-        default="mvtec_bottle",
-        help="Category name (default: mvtec_bottle)",
-    )
-    parser.add_argument(
-        "--image-size",
-        type=int,
-        default=384,
-        help="Input image size (default: 384)",
-    )
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        default=None,
-        help="Anomaly threshold (optional, default: None = always non-anomalous)",
-    )
+    parser.add_argument("--url", default="localhost:8001", help="Triton gRPC URL")
+    parser.add_argument("--category", default="mvtec_bottle")
+    parser.add_argument("--image-size", type=int, default=384)
+    parser.add_argument("--threshold", type=float, default=None)
     args = parser.parse_args()
 
-    success = test_client(
-        args.url, args.category, args.image_size, args.threshold
-    )
+    success = test_client(args.url, args.category, args.image_size, args.threshold)
     if not success:
         exit(1)
 
