@@ -1,11 +1,5 @@
 from __future__ import annotations
 
-import os
-os.environ["CUML_ACCEL_LOG_LEVEL"] = "info"
-
-import cuml
-cuml.accel.install()
-
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -15,6 +9,20 @@ import numpy as np
 import torch
 from sklearn.preprocessing import StandardScaler
 import umap
+
+
+_CUML_INSTALLED = False
+
+
+def init_cuml_accel(log_level: str = "info") -> None:
+    global _CUML_INSTALLED
+    if _CUML_INSTALLED:
+        return
+    import os
+    os.environ["CUML_ACCEL_LOG_LEVEL"] = log_level
+    import cuml
+    cuml.accel.install()
+    _CUML_INSTALLED = True
 
 GRID_SIZE = 14
 
