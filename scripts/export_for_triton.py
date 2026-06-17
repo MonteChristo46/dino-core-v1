@@ -186,6 +186,7 @@ def write_configs(
     ensemble_config_path.write_text(
         generate_ensemble_config(ensemble_name, extractor_name, scorer_name)
     )
+    (ensemble_dir / "1").mkdir(parents=True, exist_ok=True)
     logger.info("Wrote ensemble config: %s", ensemble_config_path)
 
 
