@@ -12,7 +12,7 @@ services:
       - "8002:8002"
     volumes:
       - ./model_repository:/models
-    command: ["tritonserver", "--model-repository=/models", "--strict-model-config=false"]
+    command: ["tritonserver", "--model-repository=/models", "--strict-model-config=false", "--backend-config=onnxruntime,enable-shape-inference=false"]
     shm_size: '2g'
     #deploy:
     #  resources:

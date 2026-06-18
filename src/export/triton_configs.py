@@ -26,10 +26,12 @@ output [
   {{
     name: "FEATURES"
     data_type: TYPE_FP32
+    dims: [ -1, -1 ]
   }},
   {{
     name: "PATCH_SHAPES"
     data_type: TYPE_INT64
+    dims: [ -1, 2 ]
   }}
 ]
 """
