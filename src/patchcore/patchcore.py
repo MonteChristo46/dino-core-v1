@@ -250,6 +250,10 @@ class PatchCore(torch.nn.Module):
             "patchstride": self.patch_maker.stride,
             "anomaly_scorer_num_nn": self.anomaly_scorer.n_nearest_neighbours,
         }
+        if hasattr(self, "raw_score_min"):
+            patchcore_params["raw_score_min"] = self.raw_score_min
+        if hasattr(self, "raw_score_max"):
+            patchcore_params["raw_score_max"] = self.raw_score_max
         with open(self._params_file(save_path, prepend), "wb") as save_file:
             pickle.dump(patchcore_params, save_file, pickle.HIGHEST_PROTOCOL)
 

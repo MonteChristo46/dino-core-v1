@@ -10,7 +10,7 @@ Produces three config types:
 def generate_extractor_config(extractor_name: str) -> str:
     """Config for the shared DINOv3 ONNX feature extractor.
 
-    Output dims are omitted so Triton auto-completes them from the ONNX model.
+    Output dims match the fixed ONNX model shapes (384x384 input).
     """
     return f"""name: "{extractor_name}"
 platform: "onnxruntime_onnx"
@@ -19,19 +19,19 @@ input [
   {{
     name: "IMAGE"
     data_type: TYPE_FP32
-    dims: [ -1, 3, -1, -1 ]
+    dims: [ 1, 3, 384, 384 ]
   }}
 ]
 output [
   {{
     name: "FEATURES"
     data_type: TYPE_FP32
-    dims: [ -1, -1 ]
+    dims: [ 576, 768 ]
   }},
   {{
     name: "PATCH_SHAPES"
     data_type: TYPE_INT64
-    dims: [ -1, 2 ]
+    dims: [ 2, 2 ]
   }}
 ]
 """
@@ -80,7 +80,7 @@ input [
   {{
     name: "IMAGE"
     data_type: TYPE_FP32
-    dims: [ -1, 3, -1, -1 ]
+    dims: [ 1, 3, 384, 384 ]
   }}
 ]
 output [

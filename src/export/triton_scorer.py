@@ -128,6 +128,17 @@ class TritonPythonModel:
         input_shape = self.params.get("input_shape", [3, 384, 384])
         target_h, target_w = input_shape[-2], input_shape[-1]
 
+        raw_score_min = self.params.get("raw_score_min", 0.0)
+        raw_score_max = self.params.get("raw_score_max", 1.0)
+        score_range = raw_score_max - raw_score_min
+        if score_range > 0:
+            self.score_min = raw_score_min
+            self.score_range = score_range
+            self.apply_normalization = True
+        else:
+            # TODO we must apply normalization!
+            self.apply_normalization = False
+
         self.patch_maker = PatchMaker(self.patchsize, stride=self.patchstride)
         self.anomaly_segmentor = RescaleSegmentor(
             device=self.device, target_size=(target_h, target_w)
@@ -173,6 +184,11 @@ class TritonPythonModel:
             )
             # Mean distance across K nearest neighbors → per-patch score
             patch_scores = np.mean(distances, axis=-1)
+
+            # Normalize patch scores to [0, 1] range using stored params
+            if self.apply_normalization:
+                patch_scores = (patch_scores - self.score_min) / self.score_range
+                patch_scores = np.clip(patch_scores, 0, None)
 
             # Image-level score: max over all patches
             image_scores = self.patch_maker.unpatch_scores(

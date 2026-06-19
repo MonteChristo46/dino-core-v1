@@ -113,9 +113,9 @@ def run(
                 aggregator["segmentations"].append(segmentations)
 
             scores = np.array(aggregator["scores"])
-            min_scores = scores.min(axis=-1).reshape(-1, 1)
-            max_scores = scores.max(axis=-1).reshape(-1, 1)
-            scores = (scores - min_scores) / (max_scores - min_scores)
+            raw_min_scores = scores.min(axis=-1).reshape(-1, 1)
+            raw_max_scores = scores.max(axis=-1).reshape(-1, 1)
+            scores = (scores - raw_min_scores) / (raw_max_scores - raw_min_scores)
             scores = np.mean(scores, axis=0)
 
             segmentations = np.array(aggregator["segmentations"])
@@ -284,6 +284,8 @@ def run(
                         if len(PatchCore_list) > 1
                         else ""
                     )
+                    PatchCore.raw_score_min = float(raw_min_scores[i, 0])
+                    PatchCore.raw_score_max = float(raw_max_scores[i, 0])
                     PatchCore.save_to_path(patchcore_save_path, prepend)
 
         LOGGER.info("\n\n-----\n")

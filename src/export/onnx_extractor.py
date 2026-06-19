@@ -40,7 +40,7 @@ class DinoV3FeatureExtractorONNX(nn.Module):
     def _patchify(
         self, features: torch.Tensor
     ) -> Tuple[torch.Tensor, List[int]]:
-        """Replicate PatchMaker.patchify without dynamic padding issues."""
+        """Replicate PatchMaker.patchify without dynamic padding issues for onnx export."""
         padding = int((self.patchsize - 1) // 2)
         unfolder = nn.Unfold(
             kernel_size=self.patchsize,
@@ -101,7 +101,10 @@ class DinoV3FeatureExtractorONNX(nn.Module):
                 patch_dims[1],
                 *_features.shape[2:],
             )
-            _features = _features.permute(0, -3, -2, -1, 1, 2)
+            # Convert negative indices to positive for ONNX compatibility
+            ndim = _features.ndim  # Should be 6: (B, grid_h, grid_w, C, patch_h, patch_w)
+            perm_indices = [0, ndim - 3, ndim - 2, ndim - 1, 1, 2]
+            _features = _features.permute(*perm_indices)
             perm_base_shape = _features.shape
             _features = _features.reshape(-1, *_features.shape[-2:])
             _features = F.interpolate(
@@ -116,7 +119,10 @@ class DinoV3FeatureExtractorONNX(nn.Module):
                 ref_num_patches[0],
                 ref_num_patches[1],
             )
-            _features = _features.permute(0, -2, -1, 1, 2, 3)
+            # Convert negative indices to positive for ONNX compatibility
+            ndim2 = _features.ndim  # Should be 6: (B, C, patch_h, patch_w, grid_h, grid_w)
+            perm_indices2 = [0, ndim2 - 2, ndim2 - 1, 1, 2, 3]
+            _features = _features.permute(*perm_indices2)
             _features = _features.reshape(
                 len(_features), -1, *_features.shape[-3:]
             )
