@@ -20,9 +20,12 @@ def init_cuml_accel(log_level: str = "info") -> None:
         return
     import os
     os.environ["CUML_ACCEL_LOG_LEVEL"] = log_level
-    import cuml
-    cuml.accel.install()
-    _CUML_INSTALLED = True
+    try:
+        import cuml
+        cuml.accel.install()
+        _CUML_INSTALLED = True
+    except ImportError:
+        LOGGER.warning("cuml not available — clustering will run on CPU")
 
 GRID_SIZE = 14
 

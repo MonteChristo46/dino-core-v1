@@ -123,8 +123,12 @@ class SemanticPatchStrategy:
 
         results: List[Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[dict]]] = []
 
-        profile_fn = getattr(__import__("cuml").accel, "profile", None)
-        profile_cm = profile_fn(quiet=True) if callable(profile_fn) else nullcontext(None)
+        try:
+            import cuml
+            profile_fn = getattr(cuml.accel, "profile", None)
+            profile_cm = profile_fn(quiet=True) if callable(profile_fn) else nullcontext(None)
+        except (ImportError, AttributeError):
+            profile_cm = nullcontext(None)
 
         with profile_cm as profile_result:
             for img, features_2d, sam2_mask, coverage, H, W in zip(
