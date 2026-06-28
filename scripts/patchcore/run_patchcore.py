@@ -271,6 +271,16 @@ def run(
                 optimal_threshold=optimal_threshold,
             )
 
+            # Save raw (score, label) pairs for dynamic F1 threshold recalculation.
+            # Training-job reads this to populate model_score_labels with source='training',
+            # so the ThresholdWorker can compute F1 from all individual pairs instead of
+            # relying on pre-computed TPR/FPR rates combined with fake counts.
+            np.savez(
+                os.path.join(curves_save_path, f"{dataset_name}_scores.npz"),
+                scores=scores,
+                labels=np.array(anomaly_labels, dtype=bool),
+            )
+
             # (Optional) Store PatchCore model for later re-use.
             # SAVE all patchcores only if mean_threshold is passed?
             if save_patchcore_model:
