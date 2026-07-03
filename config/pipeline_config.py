@@ -61,19 +61,19 @@ class PipelineConfig:
     # -------------------------------------------------------------------------
 
     # Number of reader worker processes (image loading).
-    reader_workers: int = 8
+    reader_workers: int = 16
 
     # Number of writer worker processes (image saving).
-    writer_workers: int = 8
+    writer_workers: int = 16
 
     # Maximum size of the read queue (pending image paths).
-    read_queue_size: int = 32
+    read_queue_size: int = 64
 
     # Maximum size of the decoded queue (loaded images waiting for GPU).
-    decoded_queue_size: int = 32
+    decoded_queue_size: int = 64
 
     # Maximum size of the write queue (processed images waiting to save).
-    write_queue_size: int = 64
+    write_queue_size: int = 128
 
     # Interval (seconds) between heartbeat log messages showing pipeline
     # progress and queue statistics.

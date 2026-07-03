@@ -39,7 +39,6 @@ from src.augmentation.blenders.seamless_clone import SeamlessCloneBlender
 from src.augmentation.strategies.random_patch import RandomPatchStrategy
 from src.augmentation.strategies.semantic_patch import SemanticPatchStrategy
 from src.backbones.dinov3 import DinoV3Backbone
-from src.clustering.base import init_cuml_accel
 from src.clustering.hdbscan_clusterer import HDBSCANClusterer
 from src.masking.sam2_masker import SAM2Masker
 from src.synthesis.fillers import DTDTextureFiller, SourceTextureFiller
@@ -51,7 +50,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 LOGGER = logging.getLogger(__name__)
 
 DATASET_ROOT = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "BigD")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "BigD_synthetic_anomalies_v8")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "..", "..", "dataset", "BigD_synthetic_anomalies_v7")
 
 ALL_CATEGORIES = [
     "candle", "capsules", "cashew", "chewinggum", "fryum",
@@ -352,8 +351,6 @@ def main() -> None:
     LOGGER.info("    sea_level_range: %s", perlin_defaults.sea_level_range)
     LOGGER.info("=" * 64)
 
-    init_cuml_accel()
-
     LOGGER.info("Loading models...")
     sam2_weights = os.path.join(PROJECT_ROOT, "weights", "sam2")
     masker = SAM2Masker(
@@ -542,20 +539,10 @@ def main() -> None:
             while (bad_idx < num_bad and completed_attempts < max_attempts) or batch_buffer:
                 flush_write_acks(non_blocking=True)
 
-                alive_readers = sum(1 for p in reader_procs if p.is_alive())
-                alive_writers = sum(1 for p in writer_procs if p.is_alive())
-                if alive_readers == 0:
-                    LOGGER.error("All reader workers died! Aborting.")
-                    break
-                if alive_writers == 0:
-                    LOGGER.error("All writer workers died! Aborting.")
-                    break
-
                 now = time.time()
                 if now - last_heartbeat >= args.heartbeat_sec:
                     LOGGER.info(
                         "  [heartbeat] bad=%d/%d attempts=%d/%d pending=%d q(read=%d decoded=%d write=%d) "
-                        "workers(r=%d/%d w=%d/%d) "
                         "mean_s(decode=%.3f sam2=%.3f batch=%.3f write=%.3f) strategy(valid=%d random=%d fail=%d)",
                         bad_idx,
                         num_bad,
@@ -565,10 +552,6 @@ def main() -> None:
                         safe_qsize(read_q),
                         safe_qsize(decoded_q),
                         safe_qsize(write_q),
-                        alive_readers,
-                        len(reader_procs),
-                        alive_writers,
-                        len(writer_procs),
                         decode_timer.mean(),
                         sam2_timer.mean(),
                         batch_timer.mean(),

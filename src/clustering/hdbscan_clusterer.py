@@ -31,10 +31,13 @@ class HDBSCANClusterer(BaseClusterer):
 
     def cluster(
         self,
-        features: torch.Tensor,
+        features,
         mask_14: np.ndarray,
     ) -> ClusteringResult:
-        feat_np = features.cpu().numpy()
+        if isinstance(features, torch.Tensor):
+            feat_np = features.cpu().numpy()
+        else:
+            feat_np = np.asarray(features)
         if feat_np.shape[0] == 0 or feat_np.shape[1] == 0:
             return ClusteringResult(
                 cluster_map_masked=np.full((14, 14), -1, dtype=int),

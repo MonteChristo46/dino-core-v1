@@ -33,10 +33,15 @@ dependencies = [
     "onnx>=1.16.0",
     "gradio>=5.36.2",
     "tritonclient[grpc]>=2.41.0",
+    "glitch-hunt-triton-client",
+    "httpx>=0.28.0",
 ]
 
 [tool.uv]
 environments = ["sys_platform == 'linux'"]
+
+[tool.uv.sources]
+glitch-hunt-triton-client = { path = "../../packages/triton-client", editable = true }
 
 [dependency-groups]
 dev = [
