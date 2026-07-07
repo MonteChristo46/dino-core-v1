@@ -27,11 +27,11 @@ RUN if [ "$RUNTIME" = "cpu" ]; then \
 # torch with CUDA, faiss-gpu, onnxruntime-gpu — all from PyPI
 RUN if [ "$RUNTIME" = "gpu" ]; then \
     pip install --no-cache-dir \
-        torch \
-        faiss-gpu \
-        onnxruntime-gpu \
-        numpy \
-        scipy \
+        torch==2.12.1 \
+        faiss-gpu==1.14.3 \
+        onnxruntime-gpu==1.27.0 \
+        numpy==2.5.1 \
+        scipy==1.18.0 \
     ; fi
 
 COPY model_repository /models
