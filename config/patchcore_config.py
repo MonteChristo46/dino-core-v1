@@ -118,3 +118,41 @@ class PatchCoreConfig:
     # Train/validation split ratio.
     # 1.0 = all training data, no validation split.
     train_val_split: float = 1.0
+
+
+@dataclass
+class TilingConfig:
+    """Tiled PatchCore configuration for very large images.
+
+    When enabled, each image is decomposed into a grid of overlapping
+    backbone-sized tiles. The coreset is taken ONCE globally over the pooled
+    tile features at training time; inference is per-tile kNN followed by
+    overlap-averaged map stitching with a single Gaussian smoothing pass.
+
+    Usage:
+        from config import TilingConfig
+
+        tiling = TilingConfig(enabled=True, tile_size=384)
+    """
+
+    # Master switch. False keeps behavior identical to untiled PatchCore.
+    enabled: bool = False
+
+    # Square tile edge in pixels. Must be a multiple of 16 (DINOv3
+    # square patch-grid constraint). Matches the backbone input size,
+    # e.g. 384.
+    tile_size: int = 384
+
+    # Overlap between adjacent tiles in pixels. None -> tile_size // 2
+    # (default 50%), guaranteeing that anomalies smaller than the stride
+    # are fully contained in at least one tile.
+    overlap: int | None = None
+
+    # Max number of tiles per backbone forward pass. Bounds GPU peak
+    # memory independently of the dataloader image batch size.
+    tile_batch_size: int = 8
+
+    # Padding value for right/bottom borders in normalized image space.
+    # 0.0 = dataset mean (neutral grey). Training and inference must pad
+    # identically so padded-border features stay in-distribution.
+    pad_value: float = 0.0

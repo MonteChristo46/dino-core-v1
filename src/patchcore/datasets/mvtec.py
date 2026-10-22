@@ -71,22 +71,29 @@ class MVTecDataset(torch.utils.data.Dataset):
 
         self.imgpaths_per_class, self.data_to_iterate = self.get_image_data()
 
-        self.transform_img = [
-            transforms.Resize(resize),
-            transforms.CenterCrop(imagesize),
+        # resize/imagesize = None switches off the respective step, giving a
+        # native-resolution passthrough (ToTensor + Normalize only). This is
+        # required for tiled processing, which must see images at full size.
+        self.transform_img = []
+        if resize is not None:
+            self.transform_img.append(transforms.Resize(resize))
+        if imagesize is not None:
+            self.transform_img.append(transforms.CenterCrop(imagesize))
+        self.transform_img += [
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
         ]
         self.transform_img = transforms.Compose(self.transform_img)
 
-        self.transform_mask = [
-            transforms.Resize(resize),
-            transforms.CenterCrop(imagesize),
-            transforms.ToTensor(),
-        ]
+        self.transform_mask = []
+        if resize is not None:
+            self.transform_mask.append(transforms.Resize(resize))
+        if imagesize is not None:
+            self.transform_mask.append(transforms.CenterCrop(imagesize))
+        self.transform_mask.append(transforms.ToTensor())
         self.transform_mask = transforms.Compose(self.transform_mask)
 
-        self.imagesize = (3, imagesize, imagesize)
+        self.imagesize = (3, imagesize, imagesize) if imagesize is not None else None
 
     def __getitem__(self, idx):
         classname, anomaly, image_path, mask_path = self.data_to_iterate[idx]

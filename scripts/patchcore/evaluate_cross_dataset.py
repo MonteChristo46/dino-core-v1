@@ -13,11 +13,31 @@ import torch
 import patchcore.common
 import patchcore.metrics
 import patchcore.patchcore
+import patchcore.tiled_patchcore
 import patchcore.utils
 
 LOGGER = logging.getLogger(__name__)
 
 _DATASETS = {"mvtec": ["patchcore.datasets.mvtec", "MVTecDataset"]}
+
+
+def _load_patchcore_or_tiled(load_path, device, nn_method, prepend=""):
+    """Load a saved model, transparently handling tiled checkpoints.
+
+    Tiled models store ``<prepend>tiling_params.pkl`` next to
+    ``<prepend>patchcore_params.pkl``; if found, the wrapper class is used.
+    """
+    if patchcore.tiled_patchcore.TiledPatchCore.has_tiling_params(load_path, prepend):
+        instance = patchcore.tiled_patchcore.tiled_from_path(
+            load_path, device, nn_method, prepend=prepend
+        )
+        LOGGER.info("Loaded TiledPatchCore from %s.", load_path)
+        return instance
+    instance = patchcore.patchcore.PatchCore(device)
+    instance.load_from_path(
+        load_path=load_path, device=device, nn_method=nn_method, prepend=prepend
+    )
+    return instance
 
 
 def _get_rss_gb():
@@ -202,9 +222,8 @@ def run(
 
             nn_method = patchcore.common.FaissNN(False, 8)
             #nn_method = patchcore.common.ApproximateFaissNN(on_gpu=False)
-            patchcore_instance = patchcore.patchcore.PatchCore(device)
-            patchcore_instance.load_from_path(
-                load_path=model_path, device=device, nn_method=nn_method
+            patchcore_instance = _load_patchcore_or_tiled(
+                model_path, device, nn_method
             )
             _log_memory_state(f"{category} after model load", device)
 
@@ -467,9 +486,19 @@ def cross_eval(model_root, model_name):
 @click.option("--num_workers", default=2, type=int, show_default=True)
 @click.option("--resize", default=256, type=int, show_default=True)
 @click.option("--imagesize", default=224, type=int, show_default=True)
-def dataset(name, data_path, subdatasets, batch_size, resize, imagesize, num_workers):
+@click.option(
+    "--native_resolution",
+    is_flag=True,
+    help="Deliver images at original size (no resize/crop). Required to "
+    "evaluate tiled models trained on native-resolution images.",
+)
+def dataset(name, data_path, subdatasets, batch_size, resize, imagesize, num_workers, native_resolution):
     dataset_info = _DATASETS[name]
     dataset_library = __import__(dataset_info[0], fromlist=[dataset_info[1]])
+
+    if native_resolution:
+        resize = None
+        imagesize = None
 
     dataloaders = {}
     categories = []

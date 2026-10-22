@@ -12,11 +12,31 @@ import patchcore.common
 import patchcore.metrics
 import patchcore.patchcore
 import patchcore.sampler
+import patchcore.tiled_patchcore
 import patchcore.utils
 
 LOGGER = logging.getLogger(__name__)
 
 _DATASETS = {"mvtec": ["patchcore.datasets.mvtec", "MVTecDataset"]}
+
+
+def _load_patchcore_or_tiled(load_path, device, nn_method, prepend=""):
+    """Load a saved model, transparently handling tiled checkpoints.
+
+    Tiled models store ``<prepend>tiling_params.pkl`` next to
+    ``<prepend>patchcore_params.pkl``; if found, the wrapper class is used.
+    """
+    if patchcore.tiled_patchcore.TiledPatchCore.has_tiling_params(load_path, prepend):
+        instance = patchcore.tiled_patchcore.tiled_from_path(
+            load_path, device, nn_method, prepend=prepend
+        )
+        LOGGER.info("Loaded TiledPatchCore from %s.", load_path)
+        return instance
+    instance = patchcore.patchcore.PatchCore(device)
+    instance.load_from_path(
+        load_path=load_path, device=device, nn_method=nn_method, prepend=prepend
+    )
+    return instance
 
 
 @click.group(chain=True)
@@ -211,9 +231,8 @@ def patch_core_loader(patch_core_paths, faiss_on_gpu, faiss_num_workers):
             )
             if n_patchcores == 1:
                 nn_method = patchcore.common.FaissNN(faiss_on_gpu, faiss_num_workers)
-                patchcore_instance = patchcore.patchcore.PatchCore(device)
-                patchcore_instance.load_from_path(
-                    load_path=patch_core_path, device=device, nn_method=nn_method
+                patchcore_instance = _load_patchcore_or_tiled(
+                    patch_core_path, device, nn_method
                 )
                 loaded_patchcores.append(patchcore_instance)
             else:
@@ -221,12 +240,9 @@ def patch_core_loader(patch_core_paths, faiss_on_gpu, faiss_num_workers):
                     nn_method = patchcore.common.FaissNN(
                         faiss_on_gpu, faiss_num_workers
                     )
-                    patchcore_instance = patchcore.patchcore.PatchCore(device)
-                    patchcore_instance.load_from_path(
-                        load_path=patch_core_path,
-                        device=device,
-                        nn_method=nn_method,
-                        prepend="Ensemble-{}-{}_".format(i + 1, n_patchcores),
+                    prepend = "Ensemble-{}-{}_".format(i + 1, n_patchcores)
+                    patchcore_instance = _load_patchcore_or_tiled(
+                        patch_core_path, device, nn_method, prepend=prepend
                     )
                     loaded_patchcores.append(patchcore_instance)
 
@@ -243,12 +259,30 @@ def patch_core_loader(patch_core_paths, faiss_on_gpu, faiss_num_workers):
 @click.option("--num_workers", default=8, type=int, show_default=True)
 @click.option("--resize", default=256, type=int, show_default=True)
 @click.option("--imagesize", default=224, type=int, show_default=True)
+@click.option(
+    "--native_resolution",
+    is_flag=True,
+    help="Deliver images at original size (no resize/crop). Required to "
+    "evaluate tiled models trained on native-resolution images.",
+)
 @click.option("--augment", is_flag=True)
 def dataset(
-    name, data_path, subdatasets, batch_size, resize, imagesize, num_workers, augment
+    name,
+    data_path,
+    subdatasets,
+    batch_size,
+    resize,
+    imagesize,
+    num_workers,
+    native_resolution,
+    augment,
 ):
     dataset_info = _DATASETS[name]
     dataset_library = __import__(dataset_info[0], fromlist=[dataset_info[1]])
+
+    if native_resolution:
+        resize = None
+        imagesize = None
 
     def get_dataloaders_iter(seed):
         for subdataset in subdatasets:

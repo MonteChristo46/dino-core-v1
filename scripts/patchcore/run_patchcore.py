@@ -13,6 +13,7 @@ import patchcore.common
 import patchcore.metrics
 import patchcore.patchcore
 import patchcore.sampler
+import patchcore.tiled_patchcore
 import patchcore.utils
 
 LOGGER = logging.getLogger(__name__)
@@ -343,6 +344,10 @@ def run(
 # NN on GPU.
 @click.option("--faiss_on_gpu", is_flag=True)
 @click.option("--faiss_num_workers", type=int, default=8)
+# Tiling (very large images). --tile_size None keeps current untiled behavior.
+@click.option("--tile_size", type=int, default=None, help="Square tile edge in px (multiple of 16). Omit to disable tiling.")
+@click.option("--tile_overlap", type=int, default=None, help="Tile overlap in px (default tile_size // 2).")
+@click.option("--tile_batch_size", type=int, default=8, help="Max tiles per backbone forward pass.")
 def patch_core(
     backbone_names,
     layers_to_extract_from,
@@ -357,6 +362,9 @@ def patch_core(
     patchsize_aggregate,
     faiss_on_gpu,
     faiss_num_workers,
+    tile_size,
+    tile_overlap,
+    tile_batch_size,
 ):
     backbone_names = list(backbone_names)
 
@@ -391,6 +399,33 @@ def patch_core(
 
             nn_method = patchcore.common.FaissNN(faiss_on_gpu, faiss_num_workers)
 
+            if tile_size is not None:
+                # Tiled mode: inner PatchCore is configured for tile-sized
+                # inputs; the dataloader imagesize is irrelevant (the wrapper
+                # fixes input_shape to the tile size). Requires the dataset
+                # to deliver native-resolution images (--native_resolution).
+                tiled_instance = patchcore.tiled_patchcore.TiledPatchCore.load(
+                    backbone=backbone,
+                    layers_to_extract_from=layers_to_extract_from,
+                    device=device,
+                    tile_size=tile_size,
+                    overlap=tile_overlap,
+                    tile_batch_size=tile_batch_size,
+                    pretrain_embed_dimension=pretrain_embed_dimension,
+                    target_embed_dimension=target_embed_dimension,
+                    patchsize=patchsize,
+                    featuresampler=sampler,
+                    anomaly_scorer_num_nn=anomaly_scorer_num_nn,
+                    nn_method=nn_method,
+                )
+                loaded_patchcores.append(tiled_instance)
+                continue
+
+            if input_shape is None:
+                raise ValueError(
+                    "Native-resolution dataloader (imagesize=None) requires "
+                    "--tile_size on the patch_core command."
+                )
             patchcore_instance = patchcore.patchcore.PatchCore(device)
             patchcore_instance.load(
                 backbone=backbone,
@@ -434,6 +469,12 @@ def sampler(name, percentage):
 @click.option("--num_workers", default=8, type=int, show_default=True)
 @click.option("--resize", default=256, type=int, show_default=True)
 @click.option("--imagesize", default=224, type=int, show_default=True)
+@click.option(
+    "--native_resolution",
+    is_flag=True,
+    help="Deliver images at original size (no resize/crop). Required for tiled "
+    "processing of large images. Images within a category must have equal size.",
+)
 @click.option("--augment", is_flag=True)
 def dataset(
     name,
@@ -444,10 +485,15 @@ def dataset(
     resize,
     imagesize,
     num_workers,
+    native_resolution,
     augment,
 ):
     dataset_info = _DATASETS[name]
     dataset_library = __import__(dataset_info[0], fromlist=[dataset_info[1]])
+
+    if native_resolution:
+        resize = None
+        imagesize = None
 
     def get_dataloaders(seed):
         dataloaders = []

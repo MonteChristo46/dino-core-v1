@@ -24,7 +24,7 @@ dependencies = [
     "einops>=0.8.0",
     "pycocotools>=2.0.0",
     "rfdetr>=1.0.0",
-    "cuml-cu12>=25.6.0",
+    "cuml-cu12>=25.6.0; sys_platform == 'linux'",
     "opensimplex>=0.4.5.1",
     "optuna>=3.5.0",
     "optuna-dashboard>=0.17.0",
@@ -33,7 +33,10 @@ dependencies = [
 ]
 
 [tool.uv]
-environments = ["sys_platform == 'linux'"]
+environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 
 [dependency-groups]
 dev = [
