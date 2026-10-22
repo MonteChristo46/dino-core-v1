@@ -1,9 +1,12 @@
+import logging
 import os
 from enum import Enum
 
 import PIL
 import torch
 from torchvision import transforms
+
+LOGGER = logging.getLogger(__name__)
 
 _CLASSNAMES = [
     "bottle",
@@ -61,7 +64,9 @@ class MVTecDataset(torch.utils.data.Dataset):
             split: [enum-option]. Indicates if training or test split of the
                    data should be used. Has to be an option taken from
                    DatasetSplit, e.g. mvtec.DatasetSplit.TRAIN. Note that
-                   mvtec.DatasetSplit.TEST will also load mask data.
+                   mvtec.DatasetSplit.TEST will also load mask data when a
+                   ground_truth/<defect> folder exists (masks are optional —
+                   missing ones are yielded as all-zero tensors).
         """
         super().__init__()
         self.source = source
@@ -130,6 +135,7 @@ class MVTecDataset(torch.utils.data.Dataset):
 
             imgpaths_per_class[classname] = {}
             maskpaths_per_class[classname] = {}
+            missing_mask_types = []
 
             for anomaly in anomaly_types:
                 anomaly_path = os.path.join(classpath, anomaly)
@@ -152,12 +158,30 @@ class MVTecDataset(torch.utils.data.Dataset):
 
                 if self.split == DatasetSplit.TEST and anomaly != "good":
                     anomaly_mask_path = os.path.join(maskpath, anomaly)
-                    anomaly_mask_files = sorted(os.listdir(anomaly_mask_path))
-                    maskpaths_per_class[classname][anomaly] = [
-                        os.path.join(anomaly_mask_path, x) for x in anomaly_mask_files
-                    ]
+                    if os.path.isdir(anomaly_mask_path):
+                        anomaly_mask_files = sorted(os.listdir(anomaly_mask_path))
+                        maskpaths_per_class[classname][anomaly] = [
+                            os.path.join(anomaly_mask_path, x) for x in anomaly_mask_files
+                        ]
+                    else:
+                        # Ground truth is optional: inference-only test sets
+                        # may ship no masks. None marks "no mask" (yielded as
+                        # an all-zero tensor by __getitem__); downstream
+                        # pixel-level metrics detect this and report NaN.
+                        missing_mask_types.append(anomaly)
+                        maskpaths_per_class[classname][anomaly] = [
+                            None for _ in imgpaths_per_class[classname][anomaly]
+                        ]
                 else:
                     maskpaths_per_class[classname]["good"] = None
+
+            if missing_mask_types:
+                LOGGER.warning(
+                    "No ground_truth masks for %s/%s — pixel-level metrics "
+                    "will be reported as NaN for this category.",
+                    classname,
+                    ", ".join(sorted(missing_mask_types)),
+                )
 
         # Unrolls the data dictionary to an easy-to-iterate list.
         data_to_iterate = []

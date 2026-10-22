@@ -205,7 +205,10 @@ class TiledPatchCore:
             for image in data_iterator:
                 if isinstance(image, dict):
                     labels_gt.extend(image["is_anomaly"].numpy().tolist())
-                    masks_gt.extend(image["mask"].numpy().tolist())
+                    # Keep masks as ndarrays ([1,H,W] per image). The former
+                    # .tolist() materialized H*W Python floats per image —
+                    # seconds and ~100MB each at native resolution.
+                    masks_gt.extend(image["mask"].numpy())
                     image = image["image"]
                 _scores, _masks = self._predict(image)
                 for score, mask in zip(_scores, _masks):

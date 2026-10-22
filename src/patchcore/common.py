@@ -22,7 +22,13 @@ class FaissNN(object):
             num_workers: Number of workers to use with FAISS for similarity search.
         """
         faiss.omp_set_num_threads(num_workers)
-        self.on_gpu = on_gpu
+        self.on_gpu = on_gpu and hasattr(faiss, "StandardGpuResources")
+        if on_gpu and not self.on_gpu:
+            print(
+                "Warning: CUDA available but faiss-cpu is installed — "
+                "kNN will run on CPU (faiss.IndexFlatL2). "
+                "Install faiss-gpu-cu12 to enable GPU kNN."
+            )
         self.search_index = None
 
     def _gpu_cloner_options(self):

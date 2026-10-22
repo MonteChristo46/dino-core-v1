@@ -181,7 +181,12 @@ def compute_and_store_final_results(
 
     mean_metrics = {}
     for i, result_key in enumerate(column_names):
-        mean_metrics[result_key] = np.mean([x[i] for x in results])
+        # NaN-tolerant: maskless categories legitimately report NaN pixel
+        # metrics; averaging only the real values keeps Mean meaningful for
+        # the rest. (np.nanmean would warn + return NaN on an all-NaN column.)
+        values = np.array([float(x[i]) for x in results])
+        finite = values[np.isfinite(values)]
+        mean_metrics[result_key] = float(finite.mean()) if finite.size else float("nan")
         LOGGER.info("{0}: {1:3.3f}".format(result_key, mean_metrics[result_key]))
 
     savename = os.path.join(results_path, "results.csv")

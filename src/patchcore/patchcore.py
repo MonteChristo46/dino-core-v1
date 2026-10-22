@@ -192,7 +192,9 @@ class PatchCore(torch.nn.Module):
             for image in data_iterator:
                 if isinstance(image, dict):
                     labels_gt.extend(image["is_anomaly"].numpy().tolist())
-                    masks_gt.extend(image["mask"].numpy().tolist())
+                    # Keep masks as ndarrays ([1,H,W] per image) — .tolist()
+                    # materializes H*W Python floats per image.
+                    masks_gt.extend(image["mask"].numpy())
                     image = image["image"]
                 _scores, _masks = self._predict(image)
                 for score, mask in zip(_scores, _masks):

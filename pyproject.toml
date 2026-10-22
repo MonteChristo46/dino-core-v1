@@ -28,7 +28,12 @@ dependencies = [
     "opensimplex>=0.4.5.1",
     "optuna>=3.5.0",
     "optuna-dashboard>=0.17.0",
-    "faiss-cpu>=1.7.0",
+    # FAISS: GPU build (CUDA 12) on Linux, CPU build on macOS (no GPU wheels
+    # exist for darwin). Never install both on one platform — they share the
+    # `faiss` module. FaissNN in src/patchcore/common.py auto-falls back to
+    # CPU kNN when the CPU build is installed.
+    "faiss-gpu-cu12>=1.7.0; sys_platform == 'linux'",
+    "faiss-cpu>=1.7.0; sys_platform == 'darwin'",
     "gradio>=5.36.2",
 ]
 
