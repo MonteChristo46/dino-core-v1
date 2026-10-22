@@ -1,6 +1,7 @@
+/graphify-out
 # Model weights
 weights/
-
+.idea
 # Datasets
 dataset/
 
@@ -13,6 +14,7 @@ output.png
 
 # Results and models
 results/
+results_tiled/
 models/
 
 # Virtual environments

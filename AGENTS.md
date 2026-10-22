@@ -35,7 +35,7 @@ Build an anomaly detection training dataset for Glitch Hunt using **synthetic an
 | Path | Purpose |
 |------|---------|
 | `src/backbones/dinov3.py` | **Canonical** DinoV3Backbone — wraps HuggingFace DINOv3, parameterized register-token stripping, `is_dinov3`/`name` flags. Shared by both subsystems. |
-| `src/patchcore/` | Vendored PatchCore (modified for DINOv3): model, feature aggregator, coreset samplers, FAISS scorer, `datasets/mvtec.py`. `src/patchcore/dinov3.py` is only a compatibility shim re-exporting the canonical backbone. |
+| `src/patchcore/` | Vendored PatchCore (modified for DINOv3): model, feature aggregator, coreset samplers, FAISS scorer, `datasets/mvtec.py`. `src/patchcore/dinov3.py` is only a compatibility shim re-exporting the canonical backbone. `src/patchcore/tiling.py` = TileMaker/TileLayout (overlapping tile grid + overlap-averaged map stitching). `src/patchcore/tiled_patchcore.py` = TiledPatchCore wrapper (global coreset once at training, tile kNN + stitched full-res maps at inference, `tiling_params.pkl` checkpoints). |
 | `src/clustering/base.py` | BaseClusterer + ClusteringResult — abstract clustering with UMAP preprocessing |
 | `src/clustering/hdbscan_clusterer.py` | HDBSCANClusterer — UMAP→HDBSCAN on DINOv3 patch features |
 | `src/masking/base.py` | BaseMasker — abstract interface for object segmentation maskers |
@@ -44,6 +44,7 @@ Build an anomaly detection training dataset for Glitch Hunt using **synthetic an
 | `src/augmentation/` | SemanticPatch/RandomPatch strategies, blenders, AugmentationChain |
 | `src/datasets/glitch_hunt_dataset.py` | GlitchHuntDataset — **legacy/unused**; ignores its `split` arg. Use MVTec format instead. |
 | `scripts/semantic_patching/generate_dataset.py` | Synthetic dataset generation pipeline (writes MVTec format: train/good, test/good, test/bad, ground_truth/bad) |
+| `tiled_patchcore/` | User-friendly tiled PatchCore CLIs over `src/patchcore/tiled_patchcore.py`: `run_tiled_patchcore.py` (train+eval+full analytics pack, good-only memory bank, DINOv3 dims auto-detected), `load_and_evaluate.py` (reload checkpoints; dataset geometry auto-resolved from the checkpoint), `shared.py` (helpers). |
 
 ### Weights Available
 `weights/` contains: dinov3_vits, dinov3_vitb, dinov3_vitl, dinov3_vithplus, dinov3_extractor, dinov3_raw, fast-sam, rf-detr, sam2, sam3, sam3.1, u2net.onnx
@@ -53,7 +54,7 @@ Build an anomaly detection training dataset for Glitch Hunt using **synthetic an
 - [x] **Fix stale imports** — `clustering/`/`masking/` now use local imports; DINOv3 wrapper duplication resolved (canonical `src/backbones/dinov3.py` + shim)
 - [x] **SAM masker implementation** (SAM2) with concept prompt support
 - [x] **Perlin noise mask generator** + anomaly compositor + generation pipeline/CLI (`generate_dataset.py`)
-- [ ] **Tiled PatchCore** for very large images: TileMaker (overlapping tiles, black padding, ~50% overlap, tile size = backbone input size e.g. 384) + TiledPatchCore wrapper. Coreset sampling stays **global** over pooled tile features, once at training time; inference = per-tile kNN + stitched, overlap-averaged anomaly maps.
+- [x] **Tiled PatchCore** for very large images: TileMaker (overlapping tiles, mean-value padding, ~50% overlap, tile size = backbone input size e.g. 384) + TiledPatchCore wrapper. Coreset sampling stays **global** over pooled tile features, once at training time; inference = per-tile kNN + stitched, overlap-averaged anomaly maps. Power-user CLI: `patch_core --tile_size 384` + `dataset --native_resolution`; friendly one-command CLIs in `tiled_patchcore/` (run + load_and_evaluate, full analytics pack).
 - [ ] **Config** via `.env` + pydantic-settings (matching workspace convention)
 
 ## Conventions
