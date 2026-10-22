@@ -65,9 +65,11 @@ def _resolve_torchvision_weights(name):
 
 _DINOV3_WEIGHTS_DIRS = {
     "dinov3_vits": "weights/dinov3_vits",
+    "dinov3_vitsplus": "weights/dinov3_vitsplus",
     "dinov3_vitb": "weights/dinov3_vitb",
     "dinov3_vitl": "weights/dinov3_vitl",
     "dinov3_vithplus": "weights/dinov3_vithplus",
+    "dinov3": "weights/dinov3",
 }
 
 
@@ -75,10 +77,17 @@ def _resolve_dinov3_weights_dir(name):
     name = name.lower()
     if name in _DINOV3_WEIGHTS_DIRS:
         return _DINOV3_WEIGHTS_DIRS[name]
-    for key, path in _DINOV3_WEIGHTS_DIRS.items():
+    # Longest keys first so e.g. "dinov3_vitsplus" does not match "dinov3_vits".
+    for key in sorted(_DINOV3_WEIGHTS_DIRS, key=len, reverse=True):
         if key in name:
-            return path
-    return _DINOV3_WEIGHTS_DIRS["dinov3"]
+            return _DINOV3_WEIGHTS_DIRS[key]
+    if os.path.exists(_DINOV3_WEIGHTS_DIRS["dinov3"]):
+        return _DINOV3_WEIGHTS_DIRS["dinov3"]
+    raise FileNotFoundError(
+        f"Unknown DINOv3 backbone name '{name}'. Known names: "
+        f"{sorted(_DINOV3_WEIGHTS_DIRS)}. Place weights in the matching "
+        f"weights/<name> directory."
+    )
 
 
 def load(name):

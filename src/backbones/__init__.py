@@ -1,3 +1,5 @@
+import os
+
 import transformers
 from .dinov3 import DinoV3Backbone
 
@@ -11,12 +13,18 @@ DINOV3_WEIGHTS_DIRS = {
 
 def _resolve_dinov3_weights_dir(name: str) -> str:
     name_lower = name.lower()
-    for key, path in DINOV3_WEIGHTS_DIRS.items():
+    # Longest keys first so e.g. "vitsplus" does not match "vits". On a match we
+    # return immediately even if the dir is missing — the constructor then raises
+    # with the exact path, instead of silently loading a different model size.
+    for key in sorted(DINOV3_WEIGHTS_DIRS, key=len, reverse=True):
         if key in name_lower:
-            import os
-            if os.path.exists(path):
-                return path
-    return "weights/dinov3"
+            return DINOV3_WEIGHTS_DIRS[key]
+    if os.path.exists("weights/dinov3"):
+        return "weights/dinov3"
+    raise FileNotFoundError(
+        f"Could not resolve a DINOv3 weights directory for '{name}'. "
+        f"Expected one of: {sorted(DINOV3_WEIGHTS_DIRS.values())}"
+    )
 
 def load(name, token=None, **kwargs):
     if "dinov3" in name.lower():

@@ -25,41 +25,45 @@ Build an anomaly detection training dataset for Glitch Hunt using **synthetic an
      test/bad/       (real anomalies, if they exist)
    ```
 
-## Current State (Early)
+## Current State
+
+> **See `README.md` first** for end-to-end usage (training, backbone switching,
+> synthetic data generation, evaluation, experiments).
 
 ### Existing Modules
 
 | Path | Purpose |
 |------|---------|
-| `src/backbones/dinov3.py` | DinoV3Backbone — wraps HuggingFace DINOv3, strips register tokens |
+| `src/backbones/dinov3.py` | **Canonical** DinoV3Backbone — wraps HuggingFace DINOv3, parameterized register-token stripping, `is_dinov3`/`name` flags. Shared by both subsystems. |
+| `src/patchcore/` | Vendored PatchCore (modified for DINOv3): model, feature aggregator, coreset samplers, FAISS scorer, `datasets/mvtec.py`. `src/patchcore/dinov3.py` is only a compatibility shim re-exporting the canonical backbone. |
 | `src/clustering/base.py` | BaseClusterer + ClusteringResult — abstract clustering with UMAP preprocessing |
 | `src/clustering/hdbscan_clusterer.py` | HDBSCANClusterer — UMAP→HDBSCAN on DINOv3 patch features |
 | `src/masking/base.py` | BaseMasker — abstract interface for object segmentation maskers |
-| `src/datasets/glitch_hunt_dataset.py` | GlitchHuntDataset — reads good/bad folder structure |
-| `src/augmentation/base.py` | BaseAugmentor — abstract interface for synthetic anomaly augmentors |
-| `src/augmentation/augmentation_chain.py` | AugmentationChain — chain-of-responsibility that tries strategies in priority order |
-| `src/augmentation/blenders/` | Blender implementations: FeatherBlender, PyramidBlender, SeamlessCloneBlender |
-
-**Note**: `__init__.py` files in `clustering/` and `masking/` still import from `patchcore.*` — these are stale and need updating to local imports.
+| `src/masking/sam2_masker.py` | SAM2Masker — object masks for the synthesis pipeline |
+| `src/synthesis/` | Perlin island generator, patch composers, texture fillers |
+| `src/augmentation/` | SemanticPatch/RandomPatch strategies, blenders, AugmentationChain |
+| `src/datasets/glitch_hunt_dataset.py` | GlitchHuntDataset — **legacy/unused**; ignores its `split` arg. Use MVTec format instead. |
+| `scripts/semantic_patching/generate_dataset.py` | Synthetic dataset generation pipeline (writes MVTec format: train/good, test/good, test/bad, ground_truth/bad) |
 
 ### Weights Available
-`weights/` contains: dinov3_vitb, dinov3_vithplus, dinov3_vitl, dinov3, fast-sam, rf-detr, sam2, sam3.1, u2net.onnx
+`weights/` contains: dinov3_vits, dinov3_vitb, dinov3_vitl, dinov3_vithplus, dinov3_extractor, dinov3_raw, fast-sam, rf-detr, sam2, sam3, sam3.1, u2net.onnx
 
 ## What Needs Building
 
-- [ ] **Fix stale imports**: `clustering/__init__.py` and `masking/__init__.py` reference `patchcore.*` — update to local relative imports
-- [ ] **SAM masker implementation** (SAM2/SAM3) with concept prompt support (image exemplar, text, points)
-- [ ] **Perlin noise mask generator** (constrained to object mask)
-- [ ] **Anomaly compositor** — uses DINOv3 clusters + Perlin mask to blend synthetic defects
-- [ ] **Pipeline orchestrator** — ties masking → clustering → synthesis → dataset export
-- [ ] **CLI / script** to run the full pipeline per category
+- [x] **Fix stale imports** — `clustering/`/`masking/` now use local imports; DINOv3 wrapper duplication resolved (canonical `src/backbones/dinov3.py` + shim)
+- [x] **SAM masker implementation** (SAM2) with concept prompt support
+- [x] **Perlin noise mask generator** + anomaly compositor + generation pipeline/CLI (`generate_dataset.py`)
+- [ ] **Tiled PatchCore** for very large images: TileMaker (overlapping tiles, black padding, ~50% overlap, tile size = backbone input size e.g. 384) + TiledPatchCore wrapper. Coreset sampling stays **global** over pooled tile features, once at training time; inference = per-tile kNN + stitched, overlap-averaged anomaly maps.
 - [ ] **Config** via `.env` + pydantic-settings (matching workspace convention)
 
 ## Conventions
 
 - **Python 3.12**. No linter/formatter/typechecker configured in this repo.
-- **UV** as package manager.
-- **Imports are local** — no `patchcore.*` package exists here. Use relative imports within `src/` (e.g., `from ..clustering.base import BaseClusterer`).
+- **UV** as package manager (`uv sync`; Linux-only dependency set).
+- **Two import layouts**: synthesis-side code uses `src.*`/`config` with the repo
+  root on sys.path; PatchCore scripts use `patchcore.*` with `src/` on sys.path
+  (`export PYTHONPATH=src` or `sys.path.insert` inside the script). The
+  `patchcore.dinov3` shim works under both.
 - **Weights are gitignored** (in `weights/`). Dataset output in `dataset/` also gitignored.
 - **New capabilities go in `src/`** as new subpackages (e.g., `src/synthesis/`, `src/pipeline/`).
 - **Scripts** go in `scripts/` and are run via `uv run python scripts/<name>.py`.
@@ -67,9 +71,10 @@ Build an anomaly detection training dataset for Glitch Hunt using **synthetic an
 ## Commands
 
 ```bash
-uv sync && source .venv/bin/activate     # Setup
+uv sync && source .venv/bin/activate     # Setup (Linux/GPU box)
 uv run python scripts/<name>.py          # Run a script
-uv run pytest test/                      # Run tests (when they exist)
+uv run pytest test/                      # Run tests
+./local_run_test.sh                      # pytest with PYTHONPATH=src (CPU-safe subset)
 ```
 
 ## Key Design Notes (for the agent)
