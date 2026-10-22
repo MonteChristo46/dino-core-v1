@@ -37,6 +37,14 @@ class BaseSampler(abc.ABC):
 
 
 class GreedyCoresetSampler(BaseSampler):
+    # Chunk size (rows) for the random-projection feature reduction.
+    # Projecting the whole [N, D] bank in one call temporarily holds N*D
+    # floats on the GPU (~7 GiB for 1.8M x 1024); PyTorch's caching
+    # allocator keeps that block reserved, and FAISS' raw cudaMalloc for
+    # its GPU index then fails with "out of memory" even though the memory
+    # is logically free.
+    _REDUCE_CHUNK_ROWS = 65536
+
     def __init__(
         self,
         percentage: float,
@@ -56,8 +64,18 @@ class GreedyCoresetSampler(BaseSampler):
             features.shape[1], self.dimension_to_project_features_to, bias=False
         )
         _ = mapper.to(self.device)
-        features = features.to(self.device)
-        return mapper(features)
+        # Chunked + no_grad: never materialize the full [N, D] bank (or an
+        # autograd graph over it) on the GPU.
+        reduced = torch.empty(
+            (features.shape[0], self.dimension_to_project_features_to),
+            dtype=features.dtype,
+            device=self.device,
+        )
+        with torch.no_grad():
+            for start in range(0, features.shape[0], self._REDUCE_CHUNK_ROWS):
+                stop = start + self._REDUCE_CHUNK_ROWS
+                reduced[start:stop] = mapper(features[start:stop].to(self.device))
+        return reduced
 
     def run(
         self, features: Union[torch.Tensor, np.ndarray]
@@ -74,6 +92,11 @@ class GreedyCoresetSampler(BaseSampler):
             features = torch.from_numpy(features)
         reduced_features = self._reduce_features(features)
         sample_indices = self._compute_greedy_coreset_indices(reduced_features)
+        del reduced_features
+        if getattr(self.device, "type", None) == "cuda":
+            # Release the projection (and other cached blocks) back to the
+            # driver before the caller allocates the FAISS GPU index.
+            torch.cuda.empty_cache()
         features = features[sample_indices]
         return self._restore_type(features)
 

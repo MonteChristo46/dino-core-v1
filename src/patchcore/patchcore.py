@@ -173,6 +173,10 @@ class PatchCore(torch.nn.Module):
         features = np.concatenate(features, axis=0)
         features = self.featuresampler.run(features)
 
+        if self.device.type == "cuda":
+            # Hand PyTorch-cached blocks back to the driver so FAISS' raw
+            # cudaMalloc for the GPU index does not hit torch's reserve.
+            torch.cuda.empty_cache()
         self.anomaly_scorer.fit(detection_features=[features])
 
     def predict(self, data):

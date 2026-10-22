@@ -1,4 +1,5 @@
 import copy
+import logging
 import os
 import pickle
 from typing import List
@@ -12,14 +13,30 @@ import torch.nn.functional as F
 
 from patchcore.dinov3 import DinoV3Backbone
 
+LOGGER = logging.getLogger(__name__)
+
 
 class FaissNN(object):
-    def __init__(self, on_gpu: bool = False, num_workers: int = 4) -> None:
+    # Cap on FAISS GPU temporary memory, cudaMalloc'd when a GPU index is
+    # created. FAISS' built-in default is 1.5 GiB *per StandardGpuResources
+    # instance*; with PyTorch's caching allocator already holding most of the
+    # card, that allocation fails with "out of memory". 256 MiB is ample for
+    # flat-index kNN search.
+    DEFAULT_GPU_TEMP_MEMORY_MB = 256
+
+    def __init__(
+        self,
+        on_gpu: bool = False,
+        num_workers: int = 4,
+        gpu_temp_memory_mb: int = DEFAULT_GPU_TEMP_MEMORY_MB,
+    ) -> None:
         """FAISS Nearest neighbourhood search.
 
         Args:
             on_gpu: If set true, nearest neighbour searches are done on GPU.
             num_workers: Number of workers to use with FAISS for similarity search.
+            gpu_temp_memory_mb: Temporary-memory cap of the shared GPU
+                resources (see DEFAULT_GPU_TEMP_MEMORY_MB).
         """
         faiss.omp_set_num_threads(num_workers)
         self.on_gpu = on_gpu and hasattr(faiss, "StandardGpuResources")
@@ -30,17 +47,50 @@ class FaissNN(object):
                 "Install faiss-gpu-cu12 to enable GPU kNN."
             )
         self.search_index = None
+        self._gpu_temp_memory_bytes = int(gpu_temp_memory_mb) * 1024 * 1024
+        self._gpu_resources = None
+
+    def _resources(self):
+        """The one shared StandardGpuResources, with a capped temp buffer.
+
+        Creating a fresh StandardGpuResources per index (the old behaviour)
+        allocates a new ~1.5 GiB temporary buffer every single time.
+        """
+        if self._gpu_resources is None:
+            resources = faiss.StandardGpuResources()
+            resources.setTempMemory(self._gpu_temp_memory_bytes)
+            self._gpu_resources = resources
+        return self._gpu_resources
+
+    def _handle_gpu_oom(self, error):
+        """On GPU OOM, warn loudly and continue on a CPU index."""
+        if "out of memory" not in str(error).lower():
+            raise error
+        LOGGER.warning(
+            "FAISS GPU allocation failed (out of memory) — falling back to a "
+            "CPU faiss.IndexFlatL2. kNN will run on CPU and be much slower; "
+            "free GPU memory or shrink the memory bank to use the GPU."
+        )
+        self.on_gpu = False
 
     def _gpu_cloner_options(self):
         return faiss.GpuClonerOptions()
 
     def _index_to_gpu(self, index):
         if self.on_gpu:
-            # For the non-gpu faiss python package, there is no GpuClonerOptions
-            # so we can not make a default in the function header.
-            return faiss.index_cpu_to_gpu(
-                faiss.StandardGpuResources(), 0, index, self._gpu_cloner_options()
-            )
+            # FAISS allocates raw device memory (cudaMalloc), bypassing
+            # PyTorch's caching allocator — hand torch's cached blocks back
+            # to the driver first so the allocation can succeed.
+            torch.cuda.empty_cache()
+            try:
+                # For the non-gpu faiss python package, there is no
+                # GpuClonerOptions so we can not make a default in the
+                # function header.
+                return faiss.index_cpu_to_gpu(
+                    self._resources(), 0, index, self._gpu_cloner_options()
+                )
+            except RuntimeError as error:
+                self._handle_gpu_oom(error)
         return index
 
     def _index_to_cpu(self, index):
@@ -50,9 +100,13 @@ class FaissNN(object):
 
     def _create_index(self, dimension):
         if self.on_gpu:
-            return faiss.GpuIndexFlatL2(
-                faiss.StandardGpuResources(), dimension, faiss.GpuIndexFlatConfig()
-            )
+            torch.cuda.empty_cache()
+            try:
+                return faiss.GpuIndexFlatL2(
+                    self._resources(), dimension, faiss.GpuIndexFlatConfig()
+                )
+            except RuntimeError as error:
+                self._handle_gpu_oom(error)
         return faiss.IndexFlatL2(dimension)
 
     def fit(self, features: np.ndarray) -> None:

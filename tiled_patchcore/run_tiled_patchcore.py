@@ -82,6 +82,8 @@ LOGGER = logging.getLogger("run_tiled_patchcore")
 @click.option("--cpu", is_flag=True,
               help="Force CPU (auto prefers CUDA, then Apple MPS).")
 @click.option("--faiss_num_workers", type=int, default=8, show_default=True)
+@click.option("--faiss_temp_memory_mb", type=int, default=256, show_default=True,
+              help="FAISS GPU temporary-memory cap per index (FAISS default: 1536).")
 @click.option("--seed", type=int, default=0, show_default=True)
 @click.option("--results_path", default="results_tiled", show_default=True)
 @click.option("--log_project", default="tiled_patchcore", show_default=True)
@@ -187,7 +189,11 @@ def main(**kwargs):
             patchsize=opts["patchsize"],
             featuresampler=sampler,
             anomaly_scorer_num_nn=opts["anomaly_scorer_num_nn"],
-            nn_method=patchcore.common.FaissNN(faiss_on_gpu, opts["faiss_num_workers"]),
+            nn_method=patchcore.common.FaissNN(
+                faiss_on_gpu,
+                opts["faiss_num_workers"],
+                gpu_temp_memory_mb=opts["faiss_temp_memory_mb"],
+            ),
         )
         tile_layout = model.tile_maker.compute_layout(image_h, image_w)
 
