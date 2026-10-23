@@ -33,6 +33,7 @@ import numpy as np
 import PIL
 import torch
 import torch.utils.data
+import tqdm
 
 import patchcore.backbones
 import patchcore.common
@@ -60,6 +61,22 @@ _DEFAULT_LAYERS = {
     "dinov3": ["7", "8"],
     "wideresnet": ["layer2", "layer3"],
 }
+
+# --- anomaly-map rendering -------------------------------------------------
+# One place defines the heatmap look, so the top-N plot and the per-image
+# segmentation pack show the very same thing (the pack used to show an
+# auto-scaled pure map, which reads as noise: every panel got stretched to its
+# own min/max, so a flat good image looked as loud as a real defect).
+_HEAT_CMAP = "magma"          # standalone anomaly-map panels
+_OVERLAY_CMAP = "autumn"      # hot-region tint painted over the image
+_OVERLAY_ALPHA = 0.75         # alpha of the flagged (>= cutoff) layer
+_CONTEXT_ALPHA = 0.45         # peak alpha of the faint below-cutoff layer
+_CUTOFF_EDGE = "white"        # iso-line drawn exactly at the decision cutoff
+_GT_EDGE = "lime"             # ground-truth mask outline
+_TILE_EDGE = "cyan"           # tile borders (seam / padding-artifact check)
+_SEG_PANEL_INCHES = 3.4       # per-panel render size of the segmentation pack
+_SEG_DPI = 180                # ~610 px per panel: defects stay visible
+_SEG_SAVE_DEPTH = 4           # path components used for the jpg filenames
 
 
 def resolve_embed_dims(backbone_name, pretrain=None, target=None):
@@ -200,6 +217,17 @@ def dataset_image_hw(dataset):
         return image.size[1], image.size[0]
 
 
+def has_both_classes(dataset):
+    """True when a split holds at least one good AND one non-good sample.
+
+    Single-class splits (e.g. BigD categories whose test/ has no anomalies)
+    make instance AUROC/thresholds undefined — sklearn's roc_curve even
+    raises — so callers warn and skip metric computation instead of crashing.
+    """
+    labels = [anomaly != "good" for _cls, anomaly, _img, _mask in dataset.data_to_iterate]
+    return bool(labels) and any(labels) and not all(labels)
+
+
 class RecordingSampler:
     """Wraps a featuresampler to record pooled/coreset row counts."""
 
@@ -300,6 +328,16 @@ def evaluate_models(models, test_dataloader):
     segmentations = np.mean(
         (segmentations - seg_min) / np.maximum(seg_max - seg_min, 1e-12), axis=0
     )
+    # Keep the four normalization constants. Scores are min-max normalized over
+    # *image* scores, maps over *all pixels*: the two [0,1] scales have the same
+    # top but different bottoms, so a threshold cannot be read off a map directly.
+    # map_cutoff_for_threshold() does the conversion for the renderers.
+    norm_stats = {
+        "score_min": min_scores.reshape(-1),
+        "score_max": max_scores.reshape(-1),
+        "map_min": seg_min.reshape(-1),
+        "map_max": seg_max.reshape(-1),
+    }
 
     anomaly_labels = [
         anomaly != "good" for _cls, anomaly, _img, _mask in test_dataloader.dataset.data_to_iterate
@@ -335,6 +373,7 @@ def evaluate_models(models, test_dataloader):
     return {
         "scores": scores,
         "segmentations": segmentations,
+        "norm_stats": norm_stats,
         "labels_gt": anomaly_labels,
         "masks_gt": masks_gt,
         "has_gt_masks": has_gt_masks,
@@ -472,36 +511,122 @@ def plot_tile_grid(image_path, layout, save_path, title):
     plt.close(fig)
 
 
-def plot_top_anomalous(image_paths, scores, segmentations, layout, save_path,
-                       n=4, title="Top anomaly candidates"):
-    """Original | heatmap | heatmap+tile-grid for the highest-scoring images.
+def _resize_2d(array, target_hw):
+    """Bilinear-resample a 2-D map/mask onto ``target_hw`` if its size differs.
 
-    The grid overlay shows whether hotspots coincide with tile seams/borders
-    (padding artifacts) or sit on real content.
+    Tiled models emit maps already cropped to the original image size
+    (``TileMaker.stitch``), so this is a no-op there. Plain checkpoints emit maps
+    at the model input size, and overlaying those on a native-resolution image
+    without resampling paints the anomaly at the wrong scale.
+    """
+    array = np.asarray(array, dtype=np.float32)
+    height, width = int(target_hw[0]), int(target_hw[1])
+    if array.shape[:2] == (height, width):
+        return array
+    resized = PIL.Image.fromarray(array, mode="F").resize((width, height), PIL.Image.BILINEAR)
+    return np.asarray(resized, dtype=np.float32)
+
+
+def _alpha_ramp_cmap(name, peak_alpha):
+    """``name`` colormap whose own alpha grows with the value (transparent low).
+
+    Keeps a below-threshold context layer from tinting the whole image: the
+    colormap's dark low end is also its transparent end, so only warm regions
+    visibly wash the picture.
+    """
+    stops = np.linspace(0.0, 1.0, 32)
+    rgba = matplotlib.colormaps[name](stops)
+    colors = [(rgb[0], rgb[1], rgb[2], peak_alpha * stop ** 2)
+              for rgb, stop in zip(rgba, stops)]
+    return matplotlib.colors.ListedColormap(colors)
+
+
+def map_cutoff_for_threshold(evaluation, threshold):
+    """Decision threshold in *anomaly-map* units, or None when undefined.
+
+    The threshold lives on the normalized-score scale; map pixels live on the
+    normalized-pixel scale (same maximum, different minimum). Reading the
+    threshold straight off the map therefore flags far too much area. Returns
+    None for single-class splits / missing stats, where no decision boundary
+    exists and the caller should fall back to a fixed fraction of the global max.
+    """
+    if threshold is None or not np.isfinite(threshold):
+        return None
+    stats = (evaluation or {}).get("norm_stats")
+    if stats is None:
+        return float(threshold)
+    raw = stats["score_min"] + threshold * (stats["score_max"] - stats["score_min"])
+    cutoff = (raw - stats["map_min"]) / np.maximum(
+        stats["map_max"] - stats["map_min"], 1e-12
+    )
+    return float(np.clip(cutoff.mean(), 0.0, 1.0))
+
+
+def overlay_anomaly_map(axis, rgb, heatmap, *, vmax, cutoff, layout=None,
+                        show_grid=False, gt_mask=None):
+    """Paint an anomaly map *over* its image — the top-N plot's look, in one place.
+
+    Three layers: a faint alpha-ramped heatmap so sub-threshold structure stays
+    readable, the flagged regions (``>= cutoff``, fully opaque tint) that actually
+    made the detector fire, and a thin iso-line exactly at ``cutoff``. Optional
+    tile grid (seam / padding artifacts) and ground-truth outline, so
+    prediction-vs-GT overlap is answerable from a single panel.
+
+    ``cutoff`` is in map units — pass ``map_cutoff_for_threshold`` output, not a
+    score threshold. ``vmax`` is the *shared* scale so brightness means the same
+    thing across every rendered file.
+    """
+    height, width = rgb.shape[:2]
+    heatmap = _resize_2d(heatmap, (height, width))
+    axis.imshow(rgb)
+    axis.imshow(heatmap, cmap=_alpha_ramp_cmap(_HEAT_CMAP, _CONTEXT_ALPHA),
+                vmin=0.0, vmax=vmax)
+    axis.imshow(np.ma.masked_where(heatmap < cutoff, heatmap),
+                cmap=_OVERLAY_CMAP, alpha=_OVERLAY_ALPHA, vmin=0.0, vmax=vmax)
+    axis.contour(heatmap, levels=[cutoff], colors=_CUTOFF_EDGE, linewidths=0.7)
+    if gt_mask is not None:
+        gt_mask = _resize_2d(gt_mask, (height, width))
+        if gt_mask.max() > 0.5:
+            axis.contour(gt_mask, levels=[0.5], colors=_GT_EDGE, linewidths=1.0)
+    if show_grid and layout is not None:
+        for y, x in layout.origins:
+            axis.add_patch(
+                matplotlib.patches.Rectangle((x, y), layout.tile_size, layout.tile_size,
+                                             fill=False, edgecolor=_TILE_EDGE,
+                                             linewidth=0.7)
+            )
+
+
+def plot_top_anomalous(image_paths, scores, segmentations, layout, save_path,
+                       n=4, title="Top anomaly candidates", cutoff=None):
+    """Original | heatmap | overlay(+tile grid) for the highest-scoring images.
+
+    The overlay shows whether hotspots coincide with tile seams/borders (padding
+    artifacts) or sit on real content. Pass ``cutoff`` (map units, see
+    map_cutoff_for_threshold) to draw exactly what crossed the decision line;
+    without it, half the global max is used.
     """
     order = np.argsort(scores)[::-1][:n]
     count = len(order)
     fig, axes = plt.subplots(count, 3, figsize=(9.5, 3.2 * count), dpi=110,
                              squeeze=False)
     vmax = max(float(np.max(segmentations)), 1e-12)
+    if cutoff is None or not np.isfinite(cutoff):
+        cutoff = 0.5 * vmax
     for row, idx in enumerate(order):
         with PIL.Image.open(image_paths[idx]) as image:
             rgb = np.asarray(image.convert("RGB"))
-        heatmap = segmentations[idx]
+        heatmap = _resize_2d(segmentations[idx], rgb.shape[:2])
         axes[row][0].imshow(rgb)
         axes[row][0].set_title(f"{os.path.basename(image_paths[idx])}\nscore={scores[idx]:.3f}")
-        axes[row][1].imshow(heatmap, cmap="magma", vmin=0.0, vmax=vmax)
+        axes[row][1].imshow(heatmap, cmap=_HEAT_CMAP, vmin=0.0, vmax=vmax)
         axes[row][1].set_title("anomaly map")
-        axes[row][2].imshow(rgb)
-        axes[row][2].imshow(np.ma.masked_where(heatmap < 0.5 * vmax, heatmap),
-                            cmap="autumn", alpha=0.75)
-        if layout is not None:
-            for y, x in layout.origins:
-                axes[row][2].add_patch(
-                    matplotlib.patches.Rectangle((x, y), layout.tile_size, layout.tile_size,
-                                                 fill=False, edgecolor="cyan", linewidth=0.7)
-                )
-        axes[row][2].set_title("overlay" + (" + tile grid" if layout else ""))
+        overlay_anomaly_map(axes[row][2], rgb, heatmap, vmax=vmax, cutoff=cutoff,
+                            layout=layout, show_grid=layout is not None)
+        axes[row][2].set_title(
+            "overlay" + (" + tile grid" if layout else "")
+            + f" (>= {cutoff:.3f})"
+        )
         for axis_row in axes[row]:
             axis_row.axis("off")
     fig.suptitle(title)
@@ -511,35 +636,107 @@ def plot_top_anomalous(image_paths, scores, segmentations, layout, save_path,
 
 
 def save_segmentation_images_for_category(
-    savefolder, dataset, scores, segmentations, records, threshold
+    savefolder, dataset, scores, segmentations, records, threshold,
+    layout=None, cutoff=None
 ):
-    """Reuse patchcore.utils plotting with ImageNet denormalization."""
+    """Render ``Original | Ground Truth | Heatmap | Overlay`` per test image.
+
+    Owns its figure instead of reusing patchcore.utils.plot_segmentation_images
+    (which stays as-is for the legacy scripts) because that renderer shows the
+    map as a standalone panel with no vmin/vmax: matplotlib then stretches *each
+    image's own* min/max to the full colormap, so a flat, low-scoring image
+    looks exactly as alarming as a real defect and nothing is comparable across
+    files. Here every map shares one scale (the category's global max) and the
+    hot region is painted over the image, like the top-N plot.
+
+    Output layout is unchanged: ``<savefolder>/<TP|FP|TN|FN>/<path-tail>.jpg``,
+    one file per test image. The GT panel and the green outline on the overlay
+    disappear when the split has no ground_truth masks.
+    """
     image_paths = [t[2] for t in dataset.data_to_iterate]
     mask_paths = [t[3] for t in dataset.data_to_iterate]
-    if not any(mask is not None for mask in mask_paths):
-        mask_paths = None  # -> utils skips the (all-black) GT panel
+    has_gt = any(mask is not None for mask in mask_paths)
     categories = [result for result, _ in records]
+    for category in set(categories):
+        os.makedirs(os.path.join(savefolder, category), exist_ok=True)
+
+    vmax = max(float(np.max(segmentations)), 1e-12) if len(segmentations) else 1e-12
+    if cutoff is None or not np.isfinite(cutoff):
+        cutoff = 0.5 * vmax
+    threshold_str = (
+        f" | Threshold: {threshold:.3f}"
+        if threshold is not None and np.isfinite(threshold) else ""
+    )
+
     std = np.array([0.229, 0.224, 0.225]).reshape(-1, 1, 1)
     mean = np.array([0.485, 0.456, 0.406]).reshape(-1, 1, 1)
 
-    def image_transform(image):
+    def denormalized(image):
+        # Exactly what the model saw (same transform, ImageNet stats undone), so
+        # the RGB and the map share one pixel grid.
         tensor = dataset.transform_img(image)
         return np.clip((tensor.numpy() * std + mean) * 255, 0, 255).astype(np.uint8)
 
-    def mask_transform(mask):
-        return dataset.transform_mask(mask).numpy()
+    panels = 4 if has_gt else 3
+    for image_path, mask_path, score, segmentation, category in tqdm.tqdm(
+        zip(image_paths, mask_paths, scores, segmentations, categories),
+        total=len(image_paths),
+        desc="Rendering segmentation images...",
+        leave=False,
+    ):
+        savename = os.path.join(
+            savefolder, category,
+            "_".join(image_path.split("/")[-_SEG_SAVE_DEPTH:]).rsplit(".", 1)[0] + ".jpg",
+        )
+        with PIL.Image.open(image_path) as image:
+            rgb = denormalized(image.convert("RGB")).transpose(1, 2, 0)
+        mask = None
+        if has_gt:
+            if mask_path is not None:
+                with PIL.Image.open(mask_path) as mask_image:
+                    mask = np.asarray(mask_image.convert("L"), dtype=np.float32) / 255.0
+            mask = _resize_2d(mask, rgb.shape[:2]) if mask is not None else None
 
-    patchcore.utils.plot_segmentation_images(
-        savefolder,
-        image_paths,
-        segmentations,
-        scores,
-        mask_paths,
-        image_transform=image_transform,
-        mask_transform=mask_transform,
-        categories=categories,
-        optimal_threshold=threshold,
-    )
+        figure, axes = plt.subplots(
+            1, panels,
+            figsize=(_SEG_PANEL_INCHES * panels, _SEG_PANEL_INCHES), dpi=_SEG_DPI,
+        )
+        col = 0
+        is_correct = category in ("TP", "TN")
+        axes[col].imshow(rgb)
+        axes[col].set_title(
+            f"Score: {score:.3f}{threshold_str}\n{category}",
+            fontsize=9, color="green" if is_correct else "red", fontweight="bold",
+        )
+        col += 1
+        if has_gt:
+            axes[col].imshow(rgb)
+            if mask is not None and mask.max() > 0.5:
+                axes[col].contour(mask, levels=[0.5], colors=_GT_EDGE, linewidths=1.0)
+            axes[col].set_title(
+                f"ground truth ({int((mask > 0.5).sum())} px)"
+                if mask is not None and mask.max() > 0.5 else "ground truth: none",
+                fontsize=9,
+            )
+            col += 1
+        heatmap = _resize_2d(segmentation, rgb.shape[:2])
+        axes[col].imshow(heatmap, cmap=_HEAT_CMAP, vmin=0.0, vmax=vmax)
+        axes[col].set_title(f"anomaly map (0-{vmax:.3f})", fontsize=9)
+        col += 1
+        overlay_anomaly_map(axes[col], rgb, heatmap, vmax=vmax, cutoff=cutoff,
+                            layout=layout, show_grid=layout is not None,
+                            gt_mask=mask)
+        axes[col].set_title(
+            ("overlay + tile grid" if layout is not None else "overlay")
+            + f" (>= {cutoff:.3f})",
+            fontsize=9,
+        )
+        for axis in axes:
+            axis.axis("off")
+        figure.tight_layout()
+        figure.savefig(savename, format="jpeg", dpi=_SEG_DPI,
+                       pil_kwargs={"quality": 85})
+        plt.close(figure)
 
 
 def write_results_and_confusion(results_dir, rows, model_name):
@@ -566,15 +763,21 @@ def write_results_and_confusion(results_dir, rows, model_name):
         column_names=column_names,
         model_names=[model_name] * len(rows),
     )
+    # Categories that could not be evaluated at all (single-class test splits)
+    # carry no confusion dict and are absent from the confusion CSV.
+    conf_rows = [row for row in rows if row.get("confusion")]
+    if not conf_rows:
+        LOGGER.info("No evaluated categories with confusion data — no confusion_matrix.csv written.")
+        return
     cm_path = os.path.join(results_dir, "confusion_matrix.csv")
     cm_columns = ["TP", "FP", "FN", "TN", "Precision", "Recall"]
     with open(cm_path, "w", newline="") as csv_file:
         writer = csv.writer(csv_file, delimiter=",")
         writer.writerow(["Model", "Category"] + cm_columns)
-        for row in rows:
+        for row in conf_rows:
             counts = row["confusion"]
             writer.writerow([model_name, row["category"]] + [counts.get(c, 0) for c in cm_columns])
         mean_values = [
-            float(np.mean([r["confusion"].get(c, 0) for r in rows])) for c in cm_columns
+            float(np.mean([r["confusion"].get(c, 0) for r in conf_rows])) for c in cm_columns
         ]
         writer.writerow([model_name, "Mean"] + mean_values)

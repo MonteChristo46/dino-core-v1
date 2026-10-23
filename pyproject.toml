@@ -25,15 +25,17 @@ dependencies = [
     "pycocotools>=2.0.0",
     "rfdetr>=1.0.0",
     "cuml-cu12>=25.6.0; sys_platform == 'linux'",
+    # pyarrow (via cudf) needs NumPy 2; numba 0.61 caps at <2.3.
+    "numpy>=2.0,<2.3",
     "opensimplex>=0.4.5.1",
     "optuna>=3.5.0",
     "optuna-dashboard>=0.17.0",
     # FAISS: GPU build (CUDA 12) on Linux, CPU build on macOS (no GPU wheels
     # exist for darwin). Never install both on one platform — they share the
     # `faiss` module. FaissNN in src/patchcore/common.py auto-falls back to
-    # CPU kNN when the CPU build is installed.
-    "faiss-gpu-cu12>=1.7.0; sys_platform == 'linux'",
-    "faiss-cpu>=1.7.0; sys_platform == 'darwin'",
+    # CPU kNN when the CPU build is installed. >=1.14 for NumPy 2 support.
+    "faiss-gpu-cu12>=1.14.0; sys_platform == 'linux'",
+    "faiss-cpu>=1.14.0; sys_platform == 'darwin'",
     "gradio>=5.36.2",
 ]
 
@@ -42,6 +44,11 @@ environments = [
     "sys_platform == 'linux'",
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
+# sam3 (git) pins numpy<2, but cudf/pyarrow (via cuml) need numpy>=2 and
+# numba 0.61 caps at <2.3. Force the intersection; sam3 is not imported by
+# the active tiled-PatchCore pipeline (see AGENTS.md) — revert this override
+# if sam3 ever breaks on numpy 2.
+override-dependencies = ["numpy>=2.0,<2.3"]
 
 [dependency-groups]
 dev = [

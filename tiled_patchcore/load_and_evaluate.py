@@ -75,7 +75,8 @@ def _category_from_model_dir(model_dir):
               help="Force CPU (auto prefers CUDA, then Apple MPS).")
 @click.option("--faiss_num_workers", type=int, default=8, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
-@click.option("--save_segmentation_images", is_flag=True)
+@click.option("--save_segmentation_images", is_flag=True,
+              help="Per-image original/GT/heatmap/overlay panels (more disk).")
 @click.option("--top_anomalous", type=int, default=4, show_default=True)
 def main(model_root, model_path, data_path, subdatasets, output_dir, batch_size,
          num_workers, resize, imagesize, gpu, cpu, faiss_num_workers, seed,
@@ -144,6 +145,12 @@ def main(model_root, model_path, data_path, subdatasets, output_dir, batch_size,
         test_set, _ = shared.build_dataset(
             data_path, category, "TEST", resize=eff_resize, imagesize=eff_imagesize, seed=seed
         )
+        if not shared.has_both_classes(test_set):
+            LOGGER.warning(
+                "Skipping mvtec_%s: test split has only one class — instance "
+                "metrics are undefined for this checkpoint on this dataset.", category,
+            )
+            continue
         test_loader = shared.build_dataloader(test_set, batch_size, num_workers)
 
         evaluation = shared.evaluate_models(models, test_loader)
@@ -154,6 +161,9 @@ def main(model_root, model_path, data_path, subdatasets, output_dir, batch_size,
         pixel_metrics = evaluation["pixel_metrics"]
         anomaly_pixel_metrics = evaluation["anomaly_pixel_metrics"]
         threshold = float(image_metrics["optimal_threshold"])
+        # Decision threshold converted into anomaly-map units (see
+        # map_cutoff_for_threshold), so overlays show what actually fired.
+        cutoff = shared.map_cutoff_for_threshold(evaluation, threshold)
         records = shared.classify_predictions(scores, labels, threshold)
 
         result_rows.append({
@@ -217,11 +227,13 @@ def main(model_root, model_path, data_path, subdatasets, output_dir, batch_size,
                 os.path.join(output_dir, "plots", f"mvtec_{category}_top_anomalous.png"),
                 n=top_anomalous,
                 title=f"mvtec_{category}: top scores" + (" + tile grid" if tile_layout else ""),
+                cutoff=cutoff,
             )
         if save_segmentation_images:
             shared.save_segmentation_images_for_category(
                 os.path.join(output_dir, "segmentation_images", f"mvtec_{category}"),
                 test_set, scores, segmentations, records, threshold,
+                layout=tile_layout, cutoff=cutoff,
             )
 
         LOGGER.info(

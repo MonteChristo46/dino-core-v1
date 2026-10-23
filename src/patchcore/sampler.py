@@ -170,28 +170,45 @@ class ApproximateGreedyCoresetSampler(GreedyCoresetSampler):
         approximate_distance_matrix = self._compute_batchwise_differences(
             features, features[start_points]
         )
-        approximate_coreset_anchor_distances = torch.mean(
-            approximate_distance_matrix, axis=-1
-        ).reshape(-1, 1)
-        coreset_indices = []
+        # Running per-row distance to the nearest selected coreset point, as a
+        # flat [N] tensor updated in place. The previous implementation rebuilt
+        # the buffer via torch.cat and synced the device with .item() on every
+        # pick, which serializes the GPU and dominates wall time for the
+        # million-row banks produced by tiled PatchCore.
+        anchor_distances = torch.mean(approximate_distance_matrix, dim=-1)
         num_coreset_samples = int(len(features) * self.percentage)
+        coreset_indices = torch.empty(
+            num_coreset_samples, dtype=torch.long, device=features.device
+        )
 
         with torch.no_grad():
-            for _ in tqdm.tqdm(range(num_coreset_samples), desc="Subsampling..."):
-                select_idx = torch.argmax(approximate_coreset_anchor_distances).item()
-                coreset_indices.append(select_idx)
-                coreset_select_distance = self._compute_batchwise_differences(
-                    features, features[select_idx : select_idx + 1]  # noqa: E203
+            # Per-row squared norms do not depend on the picks: hoist them out
+            # of the loop so each iteration costs one [N x D] @ [D x 1] matmul
+            # instead of re-reducing the full bank. Computed with the same bmm
+            # formulation _compute_batchwise_differences uses, so the picked
+            # indices stay bitwise-identical to the previous implementation.
+            features_squared_norms = features.unsqueeze(1).bmm(
+                features.unsqueeze(2)
+            ).reshape(-1)
+            for i in tqdm.tqdm(range(num_coreset_samples), desc="Subsampling..."):
+                # Keep as 0-dim tensor: indexing with it avoids a host sync.
+                select_idx = torch.argmax(anchor_distances)
+                coreset_indices[i] = select_idx
+                # dist^2 = ||a||^2 + ||b||^2 - 2<a, b>, in the same operand
+                # order as _compute_batchwise_differences. b_times_b goes
+                # through the same 1-row bmm as the old code: batched-bmm
+                # results can differ by 1 ulp from a 1-row bmm, which would
+                # flip argmax ties at million-row scale.
+                selected = features[select_idx.reshape(1)]
+                select_distances = features.mm(selected.t())
+                select_distances.squeeze_(1).mul_(-2).add_(features_squared_norms)
+                select_distances.add_(
+                    selected.unsqueeze(1).bmm(selected.unsqueeze(2)).reshape(())
                 )
-                approximate_coreset_anchor_distances = torch.cat(
-                    [approximate_coreset_anchor_distances, coreset_select_distance],
-                    dim=-1,
-                )
-                approximate_coreset_anchor_distances = torch.min(
-                    approximate_coreset_anchor_distances, dim=1
-                ).values.reshape(-1, 1)
+                select_distances.clamp_(0).sqrt_()
+                torch.minimum(anchor_distances, select_distances, out=anchor_distances)
 
-        return np.array(coreset_indices)
+        return coreset_indices.cpu().numpy()
 
 
 class RandomSampler(BaseSampler):
