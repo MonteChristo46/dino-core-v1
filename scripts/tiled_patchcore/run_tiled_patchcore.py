@@ -8,11 +8,11 @@ analytics pack next to the usual results files.
 Examples
 --------
 # Everything in / out of the box (DINOv3 ViT-B, 384px tiles, 50% overlap):
-uv run python tiled_patchcore/run_tiled_patchcore.py \
+uv run python scripts/tiled_patchcore/run_tiled_patchcore.py \
     --data_path dataset --subdatasets bottle --results_path results_tiled
 
 # All categories, GPU memory control, keep example overlays:
-uv run python tiled_patchcore/run_tiled_patchcore.py \
+uv run python scripts/tiled_patchcore/run_tiled_patchcore.py \
     --data_path dataset --backbone dinov3_vitl \
     --tile_size 384 --tile_overlap 192 --tile_batch_size 4 \
     --coreset_percentage 0.05 --save_segmentation_images
@@ -99,9 +99,9 @@ def main(**kwargs):
 
     \b
     Examples:
-      uv run python tiled_patchcore/run_tiled_patchcore.py \
+      uv run python scripts/tiled_patchcore/run_tiled_patchcore.py \
           --data_path dataset --subdatasets bottle --results_path results_tiled
-      uv run python tiled_patchcore/run_tiled_patchcore.py \
+      uv run python scripts/tiled_patchcore/run_tiled_patchcore.py \
           --data_path dataset --backbone dinov3_vitl --tile_size 384 \
           --tile_batch_size 4 --coreset_percentage 0.05
 

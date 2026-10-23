@@ -18,7 +18,7 @@ import os
 import sys
 import time
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _SRC_PATH = os.path.join(_REPO_ROOT, "src")
 if _SRC_PATH not in sys.path:
     sys.path.insert(0, _SRC_PATH)

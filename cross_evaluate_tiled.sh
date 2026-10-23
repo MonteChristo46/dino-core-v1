@@ -4,7 +4,7 @@ set -euo pipefail
 # =============================================================================
 # Tiled/Plain PatchCore — cross-evaluate saved runs on ONE real test set
 #
-# Thin wrapper around tiled_patchcore/cross_evaluate.py: takes any number of
+# Thin wrapper around scripts/tiled_patchcore/cross_evaluate.py: takes any number of
 # training-run folders (tiled and plain mix freely), evaluates each on the
 # same REAL dataset root at each checkpoint's own geometry, and writes the
 # legacy-compatible CrossEval_<ts>_<model>/ folders + the identical
@@ -106,7 +106,7 @@ if [[ -n "${PYTHON}" ]]; then
 else
     cmd+=(uv run python)
 fi
-cmd+=("${SCRIPT_DIR}/tiled_patchcore/cross_evaluate.py"
+cmd+=("${SCRIPT_DIR}/scripts/tiled_patchcore/cross_evaluate.py"
       --data_path "${DATA_ROOT}"
       --output_root "${OUTPUT_ROOT}"
       --batch_size "${BATCH_SIZE}"

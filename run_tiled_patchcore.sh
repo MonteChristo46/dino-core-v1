@@ -4,7 +4,7 @@ set -euo pipefail
 # =============================================================================
 # Tiled PatchCore — train + evaluate on very large images (one command)
 #
-# Thin wrapper around tiled_patchcore/run_tiled_patchcore.py: native-resolution
+# Thin wrapper around scripts/tiled_patchcore/run_tiled_patchcore.py: native-resolution
 # tiling, ONE global coreset over pooled tile features, full-resolution
 # stitched anomaly maps, and the full analytics pack (plots/, per_image_scores,
 # memory_bank.json, ...).
@@ -100,7 +100,7 @@ if [[ -n "${PYTHON}" ]]; then
 else
     python_cmd+=(uv run python)
 fi
-python_cmd+=("${SCRIPT_DIR}/tiled_patchcore/run_tiled_patchcore.py")
+python_cmd+=("${SCRIPT_DIR}/scripts/tiled_patchcore/run_tiled_patchcore.py")
 
 execute() {
     # execute <log_group> [category flags...]

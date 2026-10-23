@@ -16,7 +16,7 @@ honest comparison when test sets are small.
 
 Examples
 --------
-uv run python tiled_patchcore/cross_evaluate.py \
+uv run python scripts/tiled_patchcore/cross_evaluate.py \
     --model_run results_tiled/tiled_dinov3_vitb_T384_p0.01_0 \
     --model_run /path/to/plain/run \
     --data_path dataset/40mp
@@ -53,7 +53,7 @@ import patchcore.utils  # noqa: E402
 
 LOGGER = logging.getLogger("cross_evaluate")
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Exact column schema of scripts/patchcore/evaluate_cross_dataset.py —
 # compare_cross_eval_runs.py parses these names verbatim.
@@ -296,7 +296,7 @@ def main(model_run, model_name, data_path, subdatasets, output_root, batch_size,
 
     \b
     Examples:
-      uv run python tiled_patchcore/cross_evaluate.py \\
+      uv run python scripts/tiled_patchcore/cross_evaluate.py \\
           --model_run results_tiled/tiled_dinov3_vitb_T384_p0.01_0 \\
           --model_run /path/to/plain/run --data_path dataset/40mp
     """

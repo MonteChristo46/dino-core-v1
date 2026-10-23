@@ -18,7 +18,7 @@ import torch
 from click.testing import CliRunner
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SCRIPTS_DIR = os.path.join(_REPO_ROOT, "tiled_patchcore")
+_SCRIPTS_DIR = os.path.join(_REPO_ROOT, "scripts", "tiled_patchcore")
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 if _REPO_ROOT not in sys.path:

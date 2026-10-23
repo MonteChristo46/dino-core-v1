@@ -78,7 +78,7 @@ compatibility shim re-exporting it.
 | `src/patchcore_optuna/` | Optuna evaluator/objective + search spaces (backbone/layer presets). |
 | `config/` | Stdlib dataclass configs (`PatchCoreConfig`, `PipelineConfig`, `SAM2Config`, …). Documentation of defaults more than live wiring. |
 | `scripts/patchcore/` | Train+eval CLI, load-and-evaluate, cross-dataset eval. |
-| `tiled_patchcore/` | User-friendly **tiled** PatchCore for very large images: `run_tiled_patchcore.py`, `load_and_evaluate.py`, `cross_evaluate.py`, `shared.py`. |
+| `scripts/tiled_patchcore/` | User-friendly **tiled** PatchCore for very large images: `run_tiled_patchcore.py`, `load_and_evaluate.py`, `cross_evaluate.py`, `shared.py`. |
 | `scripts/semantic_patching/` | Synthetic dataset generation + visualization QA. |
 | `scripts/datasets/` | Experiments: learning curves, synthetic-anomaly threshold scaling. |
 | `scripts/optuna/` | HPO driver + dashboard. |
@@ -140,7 +140,7 @@ PatchCore pipeline, takes the coreset **once globally** over all pooled tile
 features, and reassembles per-tile kNN scores into a **full-resolution**
 anomaly map (overlaps averaged, one smoothing pass — no seams).
 
-The friendly CLI lives in `tiled_patchcore/` — one command, sane defaults,
+The friendly CLI lives in `scripts/tiled_patchcore/` — one command, sane defaults,
 no chained subcommands, no `PYTHONPATH`:
 
 ```bash
@@ -148,13 +148,13 @@ no chained subcommands, no `PYTHONPATH`:
 ./run_tiled_patchcore.sh
 
 # Train + evaluate every category under the dataset root:
-uv run python tiled_patchcore/run_tiled_patchcore.py \
+uv run python scripts/tiled_patchcore/run_tiled_patchcore.py \
     --data_path /path/to/synthetic_v1 \
     --backbone dinov3_vitb --tile_size 384 \
     --coreset_percentage 0.1 --results_path results_tiled
 
 # Re-evaluate saved checkpoints later (geometry auto-read from checkpoint):
-uv run python tiled_patchcore/load_and_evaluate.py \
+uv run python scripts/tiled_patchcore/load_and_evaluate.py \
     --model_root results_tiled/tiled/models --data_path /path/to/synthetic_v1
 
 # Cross-evaluate any number of runs (tiled + plain mixed) on ONE real test
@@ -162,7 +162,7 @@ uv run python tiled_patchcore/load_and_evaluate.py \
 # paired per-image scatters (or: edit MODEL_RUNS in ./cross_evaluate_tiled.sh).
 # --model_name sets output folder + chart legend names; without it, basenames
 # are used and same-basename collisions get their parent folder prepended.
-uv run python tiled_patchcore/cross_evaluate.py \
+uv run python scripts/tiled_patchcore/cross_evaluate.py \
     --model_run results_tiled_bigd/bigd_macaroni2 --model_name bigd_real \
     --model_run results_tiled_bigd_synthetic/bigd_macaroni2 --model_name bigd_synth \
     --data_path /path/to/BigD

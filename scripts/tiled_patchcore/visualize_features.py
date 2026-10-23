@@ -30,15 +30,15 @@ Two fit scopes:
 Examples
 --------
 # Fresh backbone (no checkpoint needed — the aggregator is parameter-free):
-uv run python tiled_patchcore/visualize_features.py \
+uv run python scripts/tiled_patchcore/visualize_features.py \
     --data_path dataset --category mosque --split test --n_images 2
 
 # Pick the DINO layers (each gets a panel, plus the PatchCore average):
-uv run python tiled_patchcore/visualize_features.py \
+uv run python scripts/tiled_patchcore/visualize_features.py \
     --data_path dataset --category mosque --layers 5,7,8
 
 # Exact checkpoint pipeline (layers + tiling geometry from the checkpoint):
-uv run python tiled_patchcore/visualize_features.py \
+uv run python scripts/tiled_patchcore/visualize_features.py \
     --model_dir results_tiled/.../models/mvtec_mosque \
     --data_path dataset --category mosque --reducer pca --fit_scope category
 """
@@ -444,9 +444,9 @@ def main(**kwargs):
 
     \b
     Examples:
-      uv run python tiled_patchcore/visualize_features.py \
+      uv run python scripts/tiled_patchcore/visualize_features.py \
           --data_path dataset --category mosque --n_images 2
-      uv run python tiled_patchcore/visualize_features.py \
+      uv run python scripts/tiled_patchcore/visualize_features.py \
           --model_dir results_tiled/.../models/mvtec_mosque \
           --data_path dataset --category mosque --reducer pca
     """

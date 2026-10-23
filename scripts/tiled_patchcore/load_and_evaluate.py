@@ -10,11 +10,11 @@ the checkpoint itself — no flags to get wrong. Ensemble directories
 Examples
 --------
 # All category models under a run's models/ dir, same categories:
-uv run python tiled_patchcore/load_and_evaluate.py \
+uv run python scripts/tiled_patchcore/load_and_evaluate.py \
     --model_root results_tiled/tiled/models --data_path dataset
 
 # One specific model:
-uv run python tiled_patchcore/load_and_evaluate.py \
+uv run python scripts/tiled_patchcore/load_and_evaluate.py \
     --model_path results_tiled/tiled/models/mvtec_bottle --data_path dataset
 
 Outputs (full analytics pack):
@@ -85,9 +85,9 @@ def main(model_root, model_path, data_path, subdatasets, output_dir, batch_size,
 
     \b
     Examples:
-      uv run python tiled_patchcore/load_and_evaluate.py \
+      uv run python scripts/tiled_patchcore/load_and_evaluate.py \
           --model_root results_tiled/tiled/models --data_path dataset
-      uv run python tiled_patchcore/load_and_evaluate.py \
+      uv run python scripts/tiled_patchcore/load_and_evaluate.py \
           -p results_tiled/tiled/models/mvtec_bottle --data_path dataset
 
     Dataset geometry is resolved from each checkpoint automatically: tiled

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Visualize per-patch DINOv3 features (UMAP/PCA -> RGB) of tiled PatchCore,
 # stitched into one full-resolution map with the tile grid painted in.
-# Adjust the CONFIG block, then: ./tiled_patchcore/run_visualize_features.sh
+# Adjust the CONFIG block, then: ./scripts/tiled_patchcore/run_visualize_features.sh
 # Extra CLI flags are passed through, e.g.:
-#   ./tiled_patchcore/run_visualize_features.sh --save_npz --umap_neighbors 30
+#   ./scripts/tiled_patchcore/run_visualize_features.sh --save_npz --umap_neighbors 30
 set -euo pipefail
 
 # ======================= CONFIG =======================
@@ -48,7 +48,7 @@ OUT_DIR="feature_maps"
 SAVE_NPZ=0                    # 1 = also dump 3D coords + layout per image
 # ======================================================
 
-cd "$( cd "$( dirname "$0" )" && pwd )/.."   # repo root (uv run from there)
+cd "$( cd "$( dirname "$0" )" && pwd )/../.."   # repo root (uv run from there)
 
 args=(--split "$SPLIT" --n_images "$N_IMAGES" --backbone "$BACKBONE"
       --tile_size "$TILE_SIZE" --tile_batch_size "$TILE_BATCH_SIZE"
@@ -71,5 +71,5 @@ fi
 [[ "$FULL_IMAGE" == "0" ]] && args+=(--no_full_image)
 [[ "$FULL_IMAGE" != "0" ]] && args+=(--full_image_size "$FULL_IMAGE_SIZE")
 
-echo "uv run python tiled_patchcore/visualize_features.py ${args[*]} $*"
-exec uv run python tiled_patchcore/visualize_features.py "${args[@]}" "$@"
+echo "uv run python scripts/tiled_patchcore/visualize_features.py ${args[*]} $*"
+exec uv run python scripts/tiled_patchcore/visualize_features.py "${args[@]}" "$@"
