@@ -35,6 +35,9 @@ models/
 # Faiss index
 *.faiss
 
+# Triton model repository
+model_repository/
+
 # Python cache
 __pycache__/
 *.pyc

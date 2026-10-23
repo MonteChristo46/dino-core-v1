@@ -1,0 +1,38 @@
+FROM nvcr.io/nvidia/tritonserver:25.12-py3
+
+ARG RUNTIME=cpu
+
+# Install system dependencies for FAISS and Python packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas-dev \
+    libomp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── CPU variant (local testing / macOS) ──
+# torch from PyTorch CPU index, everything else from PyPI
+RUN if [ "$RUNTIME" = "cpu" ]; then \
+    pip install --no-cache-dir \
+        torch --index-url https://download.pytorch.org/whl/cpu \
+    ; fi
+
+RUN if [ "$RUNTIME" = "cpu" ]; then \
+    pip install --no-cache-dir \
+        faiss-cpu \
+        onnxruntime \
+        numpy \
+        scipy \
+    ; fi
+
+# ── GPU variant (cluster deployment) ──
+# torch with CUDA, faiss-gpu, onnxruntime-gpu — all from PyPI
+RUN if [ "$RUNTIME" = "gpu" ]; then \
+    pip install --no-cache-dir \
+        torch==2.12.1 \
+        faiss-gpu==1.14.3 \
+        onnxruntime-gpu==1.27.0 \
+        numpy==2.5.1 \
+        scipy==1.18.0 \
+    ; fi
+
+COPY model_repository /models
+CMD ["tritonserver", "--model-repository=/models", "--strict-model-config=false"]

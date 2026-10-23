@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import nullcontext
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -23,6 +23,9 @@ from src.clustering.base import BaseClusterer
 from src.clustering.hdbscan_clusterer import HDBSCANClusterer
 from src.synthesis.patch_composer import PatchComposer
 from src.synthesis.random_composer import RandomPatchComposer
+
+if TYPE_CHECKING:
+    from glitch_hunt_triton_client.dinov3_raw_client import DinoV3RawClient
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,10 +40,16 @@ def _resize_mask_to_grid(mask: np.ndarray) -> np.ndarray:
 
 
 def _extract_dino_features_batch(
-    backbone: DinoV3Backbone,
+    backbone: "Union[DinoV3Backbone, DinoV3RawClient]",
     images_pil: List[Image.Image],
     device: str,
-) -> List[torch.Tensor]:
+) -> List[np.ndarray]:
+    if hasattr(backbone, "extract_batch"):
+        from glitch_hunt_triton_client.dinov3_raw_client import DinoV3RawClient
+        feats = backbone.extract_batch(images_pil)
+        grid = DinoV3RawClient.to_spatial_grid(feats)
+        return [grid[i] for i in range(len(images_pil))]
+
     from torchvision import transforms
 
     preprocess = transforms.Compose([
@@ -56,7 +65,7 @@ def _extract_dino_features_batch(
         last_hidden = outputs.last_hidden_state
 
     spatial = DinoV3Backbone.format_to_spatial_grid(last_hidden)
-    return [spatial[i] for i in range(len(images_pil))]
+    return [spatial[i].cpu().numpy() for i in range(len(images_pil))]
 
 
 class SemanticPatchStrategy:
@@ -75,7 +84,7 @@ class SemanticPatchStrategy:
 
     def __init__(
         self,
-        backbone: DinoV3Backbone,
+        backbone: Union[DinoV3Backbone, DinoV3RawClient],
         clusterer: BaseClusterer,
         composer: PatchComposer,
         random_composer: RandomPatchComposer,
@@ -134,7 +143,7 @@ class SemanticPatchStrategy:
                 fallback_mask = np.zeros((H, W), dtype=np.uint8)
 
                 mask_14 = _resize_mask_to_grid(sam2_mask)
-                feat_for_cluster = features_2d.permute(1, 2, 0).reshape(-1, features_2d.shape[0])
+                feat_for_cluster = features_2d.transpose(1, 2, 0).reshape(-1, features_2d.shape[0])
                 clustering = self.clusterer.cluster(feat_for_cluster, mask_14)
 
                 is_valid = coverage >= self.min_coverage and len(clustering.unique_clusters) >= self.min_clusters

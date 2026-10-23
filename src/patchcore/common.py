@@ -228,8 +228,8 @@ class MeanMapper(torch.nn.Module):
         self.preprocessing_dim = preprocessing_dim
 
     def forward(self, features):
-        features = features.reshape(len(features), 1, -1)
-        return F.adaptive_avg_pool1d(features, self.preprocessing_dim).squeeze(1)
+        features = features.reshape(features.shape[0], 1, -1)
+        return F.interpolate(features, size=self.preprocessing_dim, mode="linear", align_corners=False).squeeze(1)
 
 
 class Aggregator(torch.nn.Module):
@@ -240,9 +240,9 @@ class Aggregator(torch.nn.Module):
     def forward(self, features):
         """Returns reshaped and average pooled features."""
         # batchsize x number_of_layers x input_dim -> batchsize x target_dim
-        features = features.reshape(len(features), 1, -1)
-        features = F.adaptive_avg_pool1d(features, self.target_dim)
-        return features.reshape(len(features), -1)
+        features = features.reshape(features.shape[0], 1, -1)
+        features = F.interpolate(features, size=self.target_dim, mode="linear", align_corners=False)
+        return features.reshape(features.shape[0], -1)
 
 
 class RescaleSegmentor:

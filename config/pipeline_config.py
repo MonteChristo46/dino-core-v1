@@ -61,10 +61,10 @@ class PipelineConfig:
     # -------------------------------------------------------------------------
 
     # Number of reader worker processes (image loading).
-    reader_workers: int = 8
+    reader_workers: int = 4
 
     # Number of writer worker processes (image saving).
-    writer_workers: int = 8
+    writer_workers: int = 4
 
     # Maximum size of the read queue (pending image paths).
     read_queue_size: int = 32

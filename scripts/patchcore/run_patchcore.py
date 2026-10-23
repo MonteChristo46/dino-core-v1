@@ -114,9 +114,9 @@ def run(
                 aggregator["segmentations"].append(segmentations)
 
             scores = np.array(aggregator["scores"])
-            min_scores = scores.min(axis=-1).reshape(-1, 1)
-            max_scores = scores.max(axis=-1).reshape(-1, 1)
-            scores = (scores - min_scores) / (max_scores - min_scores)
+            raw_min_scores = scores.min(axis=-1).reshape(-1, 1)
+            raw_max_scores = scores.max(axis=-1).reshape(-1, 1)
+            scores = (scores - raw_min_scores) / (raw_max_scores - raw_min_scores)
             scores = np.mean(scores, axis=0)
 
             segmentations = np.array(aggregator["segmentations"])
@@ -272,6 +272,16 @@ def run(
                 optimal_threshold=optimal_threshold,
             )
 
+            # Save raw (score, label) pairs for dynamic F1 threshold recalculation.
+            # Training-job reads this to populate model_score_labels with source='training',
+            # so the ThresholdWorker can compute F1 from all individual pairs instead of
+            # relying on pre-computed TPR/FPR rates combined with fake counts.
+            np.savez(
+                os.path.join(curves_save_path, f"{dataset_name}_scores.npz"),
+                scores=scores,
+                labels=np.array(anomaly_labels, dtype=bool),
+            )
+
             # (Optional) Store PatchCore model for later re-use.
             # SAVE all patchcores only if mean_threshold is passed?
             if save_patchcore_model:
@@ -285,6 +295,8 @@ def run(
                         if len(PatchCore_list) > 1
                         else ""
                     )
+                    PatchCore.raw_score_min = float(raw_min_scores[i, 0])
+                    PatchCore.raw_score_max = float(raw_max_scores[i, 0])
                     PatchCore.save_to_path(patchcore_save_path, prepend)
 
         LOGGER.info("\n\n-----\n")
