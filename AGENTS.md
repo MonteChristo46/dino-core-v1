@@ -78,6 +78,11 @@ uv run pytest test/                      # Run tests
 ./local_run_test.sh                      # pytest with PYTHONPATH=src (CPU-safe subset)
 ```
 
+Docker (tiled-PatchCore training image, GPU): `Dockerfile.patchcore` — code baked
+in, weights/dataset/results mounted at runtime (`/app/weights`, `/data`,
+`/results`); the venv is pruned via `--no-install-package` (no sam3/RAPIDS/gradio,
+see the header comment for build/run commands and the exclusion list).
+
 ## Key Design Notes (for the agent)
 
 - Not every image needs a synthetic anomaly — only generate where clusters are diverse enough.

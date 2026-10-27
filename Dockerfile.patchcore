@@ -1,0 +1,145 @@
+# syntax=docker/dockerfile:1
+# =============================================================================
+# Tiled PatchCore — training/eval image (GPU)
+#
+# Runs run_tiled_patchcore.sh (and the scripts/tiled_patchcore/ tooling) in a
+# container. Code is baked in; ALL data is mounted at runtime — nothing under
+# weights/, dataset/ or results*/ is in the image.
+#
+# Base: nvidia/cuda 12.8 runtime — matches the locked pip wheels
+# (torch 2.10 + nvidia-*-cu12 12.8.x, faiss-gpu-cu12). The full CUDA runtime
+# comes from pip wheels; the host only needs the NVIDIA driver (>= 550) and
+# nvidia-container-toolkit.
+#
+# Pruned install: pyproject.toml is a monolith (synthesis + masking + tuning),
+# but the tiled-PatchCore path only imports torch, torchvision, timm,
+# transformers, faiss, sklearn, scipy, matplotlib, pillow, click, tqdm, numpy.
+# --no-install-package drops the rest from the venv (resolution still comes
+# from uv.lock via --frozen — versions are reproducible):
+#   - sam3/sam2/rfdetr  (synthesis/masking; sam3 is a git dep -> also means NO
+#                        git clone at build time. If a uv regression ever tries
+#                        to fetch it anyway: add git to the apt line below.)
+#   - cuml-cu12 + RAPIDS tree (visualize_features only, saves ~4 GB)
+#   - gradio, optuna, umap-learn, opensimplex, pydantic-settings, einops,
+#     pycocotools, pretrainedmodels (not used by tiled PatchCore)
+# If pyproject.toml changes, `uv sync --frozen` fails loudly on the stale
+# lock instead of silently installing the wrong thing — re-lock with
+# `uv lock` and rebuild.
+#
+# Build:   docker build -f Dockerfile.patchcore -t tiled-patchcore .
+# Run:     docker run --rm -it --gpus all --shm-size=8g \
+#             -v "$PWD/weights:/app/weights:ro" \
+#             -v "$PWD/dataset/_ad2_view:/data/_ad2_view:ro" \
+#             -v "$PWD/results_tiled_ad2:/results" \
+#             -e DATASET_PATH=/data/_ad2_view/can \
+#             tiled-patchcore
+#          # inside: ./run_tiled_patchcore.sh   (env-overridable as usual,
+#          # e.g. BACKBONE=dinov3_vitl ./run_tiled_patchcore.sh)
+#
+# Notes:
+#   - --shm-size=8g is REQUIRED: default 64 MB shm crashes the NUM_WORKERS=8
+#     dataloaders (torch "bus error" / "DataLoader worker ... killed").
+#   - GPU_ID=auto finds the GPU; use -e GPU_ID=1 to pin a device.
+#   - Results are written to /results (mounted), so artifacts survive --rm.
+#   - Container runs as root; chown results on the host if that bothers you.
+# =============================================================================
+
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# python3.12: matches requires-python ==3.12.* in uv.lock (Ubuntu 24.04 ships
+# 3.12 natively). libgomp1: OpenMP runtime for torch/faiss. No git, no
+# toolchain — every remaining dependency ships a py3.12 manylinux wheel.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 \
+        ca-certificates \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv (pinned; bump deliberately)
+COPY --from=ghcr.io/astral-sh/uv:0.11.15 /uv /uvx /bin/
+
+WORKDIR /app
+
+ENV UV_NO_CACHE=1 \
+    UV_LINK_MODE=copy
+
+# --- Dependency layer (cached until pyproject.toml/uv.lock change) ----------
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project \
+        --no-install-package sam3 \
+        --no-install-package sam2 \
+        --no-install-package rfdetr \
+        --no-install-package cuml-cu12 \
+        --no-install-package cudf-cu12 \
+        --no-install-package libcuml-cu12 \
+        --no-install-package libcudf-cu12 \
+        --no-install-package pylibcudf-cu12 \
+        --no-install-package pylibraft-cu12 \
+        --no-install-package rmm-cu12 \
+        --no-install-package cupy-cuda12x \
+        --no-install-package cuda-toolkit \
+        --no-install-package cuda-python \
+        --no-install-package numba \
+        --no-install-package numba-cuda \
+        --no-install-package nvtx \
+        --no-install-package pyarrow \
+        --no-install-package pandas \
+        --no-install-package gradio \
+        --no-install-package optuna \
+        --no-install-package optuna-dashboard \
+        --no-install-package umap-learn \
+        --no-install-package opensimplex \
+        --no-install-package pydantic-settings \
+        --no-install-package einops \
+        --no-install-package pycocotools \
+        --no-install-package pretrainedmodels
+
+# --- Code layer --------------------------------------------------------------
+COPY src/ src/
+COPY scripts/ scripts/
+COPY config/ config/
+COPY run_tiled_patchcore.sh ./
+# Second sync: installs the local project package only (deps already present).
+RUN uv sync --frozen --no-dev \
+        --no-install-package sam3 \
+        --no-install-package sam2 \
+        --no-install-package rfdetr \
+        --no-install-package cuml-cu12 \
+        --no-install-package cudf-cu12 \
+        --no-install-package libcuml-cu12 \
+        --no-install-package libcudf-cu12 \
+        --no-install-package pylibcudf-cu12 \
+        --no-install-package pylibraft-cu12 \
+        --no-install-package rmm-cu12 \
+        --no-install-package cupy-cuda12x \
+        --no-install-package cuda-toolkit \
+        --no-install-package cuda-python \
+        --no-install-package numba \
+        --no-install-package numba-cuda \
+        --no-install-package nvtx \
+        --no-install-package pyarrow \
+        --no-install-package pandas \
+        --no-install-package gradio \
+        --no-install-package optuna \
+        --no-install-package optuna-dashboard \
+        --no-install-package umap-learn \
+        --no-install-package opensimplex \
+        --no-install-package pydantic-settings \
+        --no-install-package einops \
+        --no-install-package pycocotools \
+        --no-install-package pretrainedmodels \
+    && chmod +x run_tiled_patchcore.sh
+
+# PYTHON: run_tiled_patchcore.sh uses this instead of `uv run python`, so
+# startup does no dependency resolution. DATASET_PATH/RESULTS_PATH are the
+# documented mount conventions — override with -e as needed.
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHON=/app/.venv/bin/python \
+    PYTHONFAULTHANDLER=1 \
+    DATASET_PATH=/data \
+    RESULTS_PATH=/results
+
+# Drop into a shell; run ./run_tiled_patchcore.sh (or any script) manually.
+CMD ["bash"]

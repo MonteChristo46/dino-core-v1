@@ -1,0 +1,38 @@
+# Build context for Dockerfile.patchcore — code only.
+# weights/ (17G), dataset/ (20G) and results*/ are runtime mounts, never baked in.
+
+# VCS / IDE / agent state
+.git/
+.idea/
+.opencode/
+.pytest_cache/
+__pycache__/
+**/__pycache__/
+
+# Virtual environments (platform-specific, huge)
+.venv/
+.venv-dino/
+
+# Data & artifacts — mounted at runtime
+weights/
+dataset/
+results/
+results*/
+feature_maps/
+img/
+mlflow_data/
+output/
+
+# Knowledge graph (regenerable)
+graphify-out/
+
+# Misc
+docs/
+*.tar.gz
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.log
+Dockerfile.*
+docker-compose.yml
