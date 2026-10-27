@@ -20,12 +20,25 @@ uv run python scripts/tiled_patchcore/run_tiled_patchcore.py \
 Run folder layout (compatible with scripts/patchcore tooling):
     <results_path>/<log_group>/models/mvtec_<cat>/   (params, faiss, tiling_params)
     <results_path>/<log_group>/results.csv, confusion_matrix.csv,
-    per_image_scores.csv, memory_bank.json, timing.json, curves/, plots/,
-    segmentation_images/mvtec_<cat>/<TP|FP|TN|FN>/ (--save_segmentation_images)
+    per_image_scores.csv, memory_bank.json, timing.json, run_config.json,
+    curves/, plots/, segmentation_images/mvtec_<cat>/<TP|FP|TN|FN>/
+    (--save_segmentation_images)
+
+Failure semantics: a category that raises is logged with its traceback and
+the run continues with the remaining categories; run-level artifacts
+(results.csv, memory_bank.json, timing.json) are flushed after EVERY
+category, so a hard kill (OOM, SIGKILL) never erases finished work. The
+process exits 1 at the end if any category failed.
+
+Memory discipline: the pooled training bank and the full-resolution eval
+maps are memory-mapped temp files (see --bank_cache_dir), not Python lists —
+host RAM stays ~constant in the number of images. The coreset's projected
+[N, 128] bank still lives on the GPU (wall at N ≈ 25M pooled rows).
 """
 import logging
 import os
 import sys
+import tempfile
 import time
 
 import click
@@ -67,6 +80,11 @@ LOGGER = logging.getLogger("run_tiled_patchcore")
               help="Tile overlap px (default tile_size // 2, i.e. 50%).")
 @click.option("--tile_batch_size", type=int, default=8, show_default=True,
               help="Tiles per backbone forward pass (GPU peak knob).")
+@click.option("--bank_cache_dir", type=click.Path(file_okay=False), default=None,
+              help="Directory for the memmap pooled-feature bank and streamed "
+              "eval maps (default: system temp). Use a local SSD path — on "
+              "tmpfs the 'disk' bank is RAM (defeats the purpose), on NFS it "
+              "is slow.")
 @click.option("--pad_value", type=float, default=0.0, show_default=True,
               help="Border padding value in normalized space (0.0 = dataset mean).")
 @click.option("--coreset_percentage", "-p", type=float, default=0.01, show_default=True,
@@ -115,6 +133,8 @@ def main(**kwargs):
     patchcore.utils.fix_seeds(opts["seed"], device)
     torch.manual_seed(opts["seed"])
     np.random.seed(opts["seed"])
+    if opts["bank_cache_dir"] is not None:
+        os.makedirs(opts["bank_cache_dir"], exist_ok=True)
 
     categories = list(opts["subdatasets"]) or shared.discover_categories(opts["data_path"])
     if not categories:
@@ -140,6 +160,23 @@ def main(**kwargs):
     for folder in (models_dir, curves_dir, plots_dir):
         os.makedirs(folder, exist_ok=True)
 
+    # Self-describing run folder: exact CLI + resolved options, written up
+    # front so even a crashed run can be reproduced without shell scrollback.
+    shared.write_json(
+        os.path.join(run_dir, "run_config.json"),
+        {
+            "argv": sys.argv,
+            "options": {
+                key: list(value) if isinstance(value, tuple) else value
+                for key, value in opts.items()
+            },
+            "categories": categories,
+            "layers": layers,
+            "device": str(device),
+            "faiss_on_gpu": faiss_on_gpu,
+        },
+    )
+
     LOGGER.info(
         "Tiled PatchCore | device=%s backbone=%s tile=%d stride=%s categories=%s",
         device, opts["backbone"], opts["tile_size"],
@@ -148,197 +185,225 @@ def main(**kwargs):
     )
 
     result_rows, memory_bank, timings = [], {}, {}
+    failed = []
     for category in categories:
         LOGGER.info("=== Category: %s ===", category)
-        train_set, dropped = shared.build_dataset(
-            opts["data_path"], category, "TRAIN",
-            resize=None, imagesize=None,  # tiled => native resolution
-            train_val_split=opts["train_val_split"], seed=opts["seed"],
-            good_only=True,
-        )
-        test_set, _ = shared.build_dataset(
-            opts["data_path"], category, "TEST", resize=None, imagesize=None,
-            seed=opts["seed"],
-        )
-        if dropped:
-            LOGGER.info("Good-only filter dropped %d train/bad samples.", dropped)
-        train_loader = shared.build_dataloader(train_set, opts["batch_size"], opts["num_workers"])
-        test_loader = shared.build_dataloader(test_set, opts["batch_size"], opts["num_workers"])
-
-        image_h, image_w = shared.dataset_image_hw(test_set)
-        # Seed before backbone construction: untrained test backbones (random
-        # init) must match what load_models_from_dir() reproduces at eval time.
-        torch.manual_seed(opts["seed"])
-        backbone = patchcore.backbones.load(opts["backbone"])
-        backbone.name, backbone.seed = opts["backbone"], None
-
-        sampler = shared.RecordingSampler(
-            patchcore.sampler.ApproximateGreedyCoresetSampler(
-                opts["coreset_percentage"], device
+        try:
+            train_set, dropped = shared.build_dataset(
+                opts["data_path"], category, "TRAIN",
+                resize=None, imagesize=None,  # tiled => native resolution
+                train_val_split=opts["train_val_split"], seed=opts["seed"],
+                good_only=True,
             )
-        )
-        model = TiledPatchCore.load(
-            backbone=backbone,
-            layers_to_extract_from=layers,
-            device=device,
-            tile_size=opts["tile_size"],
-            overlap=opts["tile_overlap"],
-            pad_value=opts["pad_value"],
-            tile_batch_size=opts["tile_batch_size"],
-            pretrain_embed_dimension=pretrain_dim,
-            target_embed_dimension=target_dim,
-            patchsize=opts["patchsize"],
-            featuresampler=sampler,
-            anomaly_scorer_num_nn=opts["anomaly_scorer_num_nn"],
-            nn_method=patchcore.common.FaissNN(
-                faiss_on_gpu,
-                opts["faiss_num_workers"],
-                gpu_temp_memory_mb=opts["faiss_temp_memory_mb"],
-            ),
-        )
-        tile_layout = model.tile_maker.compute_layout(image_h, image_w)
-
-        start = time.perf_counter()
-        model.fit(train_loader)
-        fit_seconds = time.perf_counter() - start
-
-        # Single-class test splits (e.g. BigD categories without test
-        # anomalies) make AUROC/threshold undefined and sklearn raises —
-        # still train + save the model, but skip prediction/metrics/curves.
-        evaluation = None
-        if shared.has_both_classes(test_set):
-            evaluation = shared.evaluate_models([(model, True)], test_loader)
-        else:
-            LOGGER.warning(
-                "mvtec_%s: test split has only one class — model is trained and "
-                "saved, but prediction/metrics/curves are skipped (no threshold "
-                "definable; cross-evaluation will skip this category).", category,
+            test_set, _ = shared.build_dataset(
+                opts["data_path"], category, "TEST", resize=None, imagesize=None,
+                seed=opts["seed"],
             )
+            if dropped:
+                LOGGER.info("Good-only filter dropped %d train/bad samples.", dropped)
+            train_loader = shared.build_dataloader(train_set, opts["batch_size"], opts["num_workers"])
+            test_loader = shared.build_dataloader(test_set, opts["batch_size"], opts["num_workers"])
 
-        # ---- results row + analytics -------------------------------------
-        if evaluation is not None:
-            scores = evaluation["scores"]
-            segmentations = evaluation["segmentations"]
-            labels = [int(l) for l in evaluation["labels_gt"]]
-            image_metrics = evaluation["image_metrics"]
-            pixel_metrics = evaluation["pixel_metrics"]
-            anomaly_pixel_metrics = evaluation["anomaly_pixel_metrics"]
-            threshold = float(image_metrics["optimal_threshold"])
-            # Decision threshold converted into anomaly-map units, so overlays
-            # show exactly the pixels that made the call (see map_cutoff_for_threshold).
-            cutoff = shared.map_cutoff_for_threshold(evaluation, threshold)
-            records = shared.classify_predictions(scores, labels, threshold)
-            result_rows.append({
-                "category": f"mvtec_{category}",
-                "instance_auroc": image_metrics["auroc"],
-                "full_pixel_auroc": pixel_metrics["auroc"] if pixel_metrics else float("nan"),
-                "anomaly_pixel_auroc": anomaly_pixel_metrics["auroc"]
-                if anomaly_pixel_metrics else float("nan"),
-                "optimal_threshold": threshold,
-                "confusion": shared.confusion_counts(records),
-            })
-            shared.write_per_image_scores_csv(
-                os.path.join(run_dir, "per_image_scores.csv"),
-                category, test_set, scores, records,
-            )
-        else:
-            nan = float("nan")
-            result_rows.append({
-                "category": f"mvtec_{category}",
-                "instance_auroc": nan,
-                "full_pixel_auroc": nan,
-                "anomaly_pixel_auroc": nan,
-                "optimal_threshold": nan,
-                "confusion": None,
-            })
-        memory_bank[f"mvtec_{category}"] = {
-            "tile_size": opts["tile_size"],
-            "stride": model.tile_maker.stride,
-            "tiles_per_image": tile_layout.num_tiles,
-            "image_hw": [image_h, image_w],
-            "pooled_feature_rows": sampler.pooled_rows,
-            "coreset_rows": sampler.coreset_rows,
-            "feature_dim": int(model.anomaly_scorer.detection_features.shape[1]),
-        }
-        timings[f"mvtec_{category}"] = {
-            "fit_seconds": round(fit_seconds, 3),
-            "predict_seconds": round(evaluation["predict_seconds"], 3)
-            if evaluation else None,
-            "n_train_images": len(train_set),
-            "n_test_images": len(test_set),
-        }
+            image_h, image_w = shared.dataset_image_hw(test_set)
+            # Seed before backbone construction: untrained test backbones (random
+            # init) must match what load_models_from_dir() reproduces at eval time.
+            torch.manual_seed(opts["seed"])
+            backbone = patchcore.backbones.load(opts["backbone"])
+            backbone.name, backbone.seed = opts["backbone"], None
 
-        first_test_image = test_set.data_to_iterate[0][2]
-        shared.plot_tile_grid(
-            first_test_image, tile_layout,
-            os.path.join(plots_dir, f"mvtec_{category}_tile_grid.png"),
-            title=f"mvtec_{category} tile grid",
-        )
-        if evaluation is not None:
-            np.savez(
-                os.path.join(curves_dir, f"mvtec_{category}_curves.npz"),
-                image_fpr=image_metrics["fpr"],
-                image_tpr=image_metrics["tpr"],
-                image_thresholds=image_metrics["threshold"],
-                pixel_fpr=pixel_metrics["fpr"] if pixel_metrics else np.array([]),
-                pixel_tpr=pixel_metrics["tpr"] if pixel_metrics else np.array([]),
-                image_auroc=image_metrics["auroc"],
-                pixel_auroc=pixel_metrics["auroc"] if pixel_metrics else float("nan"),
-                anomaly_pixel_auroc=anomaly_pixel_metrics["auroc"]
-                if anomaly_pixel_metrics else float("nan"),
-                optimal_threshold=threshold,
-            )
-            if shared.plot_score_distribution(
-                scores, labels, threshold,
-                os.path.join(plots_dir, f"mvtec_{category}_score_dist.png"),
-                title=f"mvtec_{category}: score distribution",
-            ):
-                shared.plot_roc(
-                    image_metrics,
-                    os.path.join(plots_dir, f"mvtec_{category}_roc.png"),
-                    title=f"mvtec_{category}: image-level ROC",
+            sampler = shared.RecordingSampler(
+                patchcore.sampler.ApproximateGreedyCoresetSampler(
+                    opts["coreset_percentage"], device
                 )
-            if opts["top_anomalous"] > 0:
-                image_paths = [t[2] for t in test_set.data_to_iterate]
-                shared.plot_top_anomalous(
-                    image_paths, scores, segmentations, tile_layout,
-                    os.path.join(plots_dir, f"mvtec_{category}_top_anomalous.png"),
-                    n=opts["top_anomalous"],
-                    title=f"mvtec_{category}: top scores + tile grid (check seams/borders)",
-                    cutoff=cutoff,
+            )
+            model = TiledPatchCore.load(
+                backbone=backbone,
+                layers_to_extract_from=layers,
+                device=device,
+                tile_size=opts["tile_size"],
+                overlap=opts["tile_overlap"],
+                pad_value=opts["pad_value"],
+                tile_batch_size=opts["tile_batch_size"],
+                bank_cache_dir=opts["bank_cache_dir"],
+                pretrain_embed_dimension=pretrain_dim,
+                target_embed_dimension=target_dim,
+                patchsize=opts["patchsize"],
+                featuresampler=sampler,
+                anomaly_scorer_num_nn=opts["anomaly_scorer_num_nn"],
+                nn_method=patchcore.common.FaissNN(
+                    faiss_on_gpu,
+                    opts["faiss_num_workers"],
+                    gpu_temp_memory_mb=opts["faiss_temp_memory_mb"],
+                ),
+            )
+            tile_layout = model.tile_maker.compute_layout(image_h, image_w)
+
+            start = time.perf_counter()
+            model.fit(train_loader)
+            fit_seconds = time.perf_counter() - start
+
+            # Single-class test splits (e.g. BigD categories without test
+            # anomalies) make AUROC/threshold undefined and sklearn raises —
+            # still train + save the model, but skip prediction/metrics/curves.
+            # Segmentation/GT maps stream into a memmap-backed temp dir (they
+            # are tens of GB at native resolution); rebound every category,
+            # which finalizes the previous one and deletes its files.
+            eval_maps_tmp = tempfile.TemporaryDirectory(dir=opts["bank_cache_dir"])
+            evaluation = None
+            if shared.has_both_classes(test_set):
+                evaluation = shared.evaluate_models(
+                    [(model, True)], test_loader, maps_dir=eval_maps_tmp.name
                 )
-            if opts["save_segmentation_images"]:
-                shared.save_segmentation_images_for_category(
-                    os.path.join(run_dir, "segmentation_images", f"mvtec_{category}"),
-                    test_set, scores, segmentations, records, threshold,
-                    layout=tile_layout, cutoff=cutoff,
+            else:
+                LOGGER.warning(
+                    "mvtec_%s: test split has only one class — model is trained and "
+                    "saved, but prediction/metrics/curves are skipped (no threshold "
+                    "definable; cross-evaluation will skip this category).", category,
                 )
 
-        if not opts["no_save_model"]:
-            model_dir = os.path.join(models_dir, f"mvtec_{category}")
-            model.save_to_path(model_dir)
-            index_mb = os.path.getsize(
-                os.path.join(model_dir, "nnscorer_search_index.faiss")
-            ) / 1e6
-            memory_bank[f"mvtec_{category}"]["faiss_index_mb"] = round(index_mb, 2)
-            LOGGER.info("Saved model (+tiling_params.pkl) to %s", model_dir)
+            # ---- results row + analytics -------------------------------------
+            if evaluation is not None:
+                scores = evaluation["scores"]
+                segmentations = evaluation["segmentations"]
+                labels = [int(l) for l in evaluation["labels_gt"]]
+                image_metrics = evaluation["image_metrics"]
+                pixel_metrics = evaluation["pixel_metrics"]
+                anomaly_pixel_metrics = evaluation["anomaly_pixel_metrics"]
+                threshold = float(image_metrics["optimal_threshold"])
+                # Decision threshold converted into anomaly-map units, so overlays
+                # show exactly the pixels that made the call (see map_cutoff_for_threshold).
+                cutoff = shared.map_cutoff_for_threshold(evaluation, threshold)
+                records = shared.classify_predictions(scores, labels, threshold)
+                result_rows.append({
+                    "category": f"mvtec_{category}",
+                    "instance_auroc": image_metrics["auroc"],
+                    "full_pixel_auroc": pixel_metrics["auroc"] if pixel_metrics else float("nan"),
+                    "anomaly_pixel_auroc": anomaly_pixel_metrics["auroc"]
+                    if anomaly_pixel_metrics else float("nan"),
+                    "optimal_threshold": threshold,
+                    "confusion": shared.confusion_counts(records),
+                })
+                shared.write_per_image_scores_csv(
+                    os.path.join(run_dir, "per_image_scores.csv"),
+                    category, test_set, scores, records,
+                )
+            else:
+                nan = float("nan")
+                result_rows.append({
+                    "category": f"mvtec_{category}",
+                    "instance_auroc": nan,
+                    "full_pixel_auroc": nan,
+                    "anomaly_pixel_auroc": nan,
+                    "optimal_threshold": nan,
+                    "confusion": None,
+                })
+            memory_bank[f"mvtec_{category}"] = {
+                "tile_size": opts["tile_size"],
+                "stride": model.tile_maker.stride,
+                "tiles_per_image": tile_layout.num_tiles,
+                "image_hw": [image_h, image_w],
+                "pooled_feature_rows": sampler.pooled_rows,
+                "coreset_rows": sampler.coreset_rows,
+                "feature_dim": int(model.anomaly_scorer.detection_features.shape[1]),
+            }
+            timings[f"mvtec_{category}"] = {
+                "fit_seconds": round(fit_seconds, 3),
+                "predict_seconds": round(evaluation["predict_seconds"], 3)
+                if evaluation else None,
+                "n_train_images": len(train_set),
+                "n_test_images": len(test_set),
+            }
 
-        if evaluation is not None:
-            LOGGER.info(
-                "mvtec_%s: instance_auroc=%.3f full_pixel_auroc=%s anomaly_pixel_auroc=%s "
-                "threshold=%.3f (fit %.1fs, predict %.1fs)",
-                category, image_metrics["auroc"],
-                f"{pixel_metrics['auroc']:.3f}" if pixel_metrics else "n/a",
-                f"{anomaly_pixel_metrics['auroc']:.3f}" if anomaly_pixel_metrics else "n/a",
-                threshold, fit_seconds, evaluation["predict_seconds"],
+            first_test_image = test_set.data_to_iterate[0][2]
+            shared.plot_tile_grid(
+                first_test_image, tile_layout,
+                os.path.join(plots_dir, f"mvtec_{category}_tile_grid.png"),
+                title=f"mvtec_{category} tile grid",
             )
-        else:
-            LOGGER.info("mvtec_%s: model saved; metrics skipped (fit %.1fs)",
-                        category, fit_seconds)
+            if evaluation is not None:
+                np.savez(
+                    os.path.join(curves_dir, f"mvtec_{category}_curves.npz"),
+                    image_fpr=image_metrics["fpr"],
+                    image_tpr=image_metrics["tpr"],
+                    image_thresholds=image_metrics["threshold"],
+                    pixel_fpr=pixel_metrics["fpr"] if pixel_metrics else np.array([]),
+                    pixel_tpr=pixel_metrics["tpr"] if pixel_metrics else np.array([]),
+                    image_auroc=image_metrics["auroc"],
+                    pixel_auroc=pixel_metrics["auroc"] if pixel_metrics else float("nan"),
+                    anomaly_pixel_auroc=anomaly_pixel_metrics["auroc"]
+                    if anomaly_pixel_metrics else float("nan"),
+                    optimal_threshold=threshold,
+                )
+                if shared.plot_score_distribution(
+                    scores, labels, threshold,
+                    os.path.join(plots_dir, f"mvtec_{category}_score_dist.png"),
+                    title=f"mvtec_{category}: score distribution",
+                ):
+                    shared.plot_roc(
+                        image_metrics,
+                        os.path.join(plots_dir, f"mvtec_{category}_roc.png"),
+                        title=f"mvtec_{category}: image-level ROC",
+                    )
+                if opts["top_anomalous"] > 0:
+                    image_paths = [t[2] for t in test_set.data_to_iterate]
+                    shared.plot_top_anomalous(
+                        image_paths, scores, segmentations, tile_layout,
+                        os.path.join(plots_dir, f"mvtec_{category}_top_anomalous.png"),
+                        n=opts["top_anomalous"],
+                        title=f"mvtec_{category}: top scores + tile grid (check seams/borders)",
+                        cutoff=cutoff,
+                    )
+                if opts["save_segmentation_images"]:
+                    shared.save_segmentation_images_for_category(
+                        os.path.join(run_dir, "segmentation_images", f"mvtec_{category}"),
+                        test_set, scores, segmentations, records, threshold,
+                        layout=tile_layout, cutoff=cutoff,
+                    )
 
-    shared.write_results_and_confusion(run_dir, result_rows, model_name=opts["log_group"])
-    shared.write_json(os.path.join(run_dir, "memory_bank.json"), memory_bank)
-    shared.write_json(os.path.join(run_dir, "timing.json"), timings)
+            if not opts["no_save_model"]:
+                model_dir = os.path.join(models_dir, f"mvtec_{category}")
+                model.save_to_path(model_dir)
+                index_mb = os.path.getsize(
+                    os.path.join(model_dir, "nnscorer_search_index.faiss")
+                ) / 1e6
+                memory_bank[f"mvtec_{category}"]["faiss_index_mb"] = round(index_mb, 2)
+                LOGGER.info("Saved model (+tiling_params.pkl) to %s", model_dir)
+
+            if evaluation is not None:
+                LOGGER.info(
+                    "mvtec_%s: instance_auroc=%.3f full_pixel_auroc=%s anomaly_pixel_auroc=%s "
+                    "threshold=%.3f (fit %.1fs, predict %.1fs)",
+                    category, image_metrics["auroc"],
+                    f"{pixel_metrics['auroc']:.3f}" if pixel_metrics else "n/a",
+                    f"{anomaly_pixel_metrics['auroc']:.3f}" if anomaly_pixel_metrics else "n/a",
+                    threshold, fit_seconds, evaluation["predict_seconds"],
+                )
+            else:
+                LOGGER.info("mvtec_%s: model saved; metrics skipped (fit %.1fs)",
+                            category, fit_seconds)
+        except Exception:
+            # One bad category (corrupt image, CUDA OOM at its resolution,
+            # ...) must not take down the whole multi-category run. A hard
+            # SIGKILL still can't be caught — that's what the flush below is
+            # for: finished categories are already on disk.
+            LOGGER.exception(
+                "Category '%s' FAILED — continuing with the remaining "
+                "categories; exit code will be 1 at the end.", category,
+            )
+            failed.append(category)
+        # Flush run-level artifacts after EVERY category: a later crash must
+        # never erase the analytics of the categories that already finished.
+        # (results.csv is overwritten wholesale, not appended to.)
+        shared.write_results_and_confusion(run_dir, result_rows, model_name=opts["log_group"])
+        shared.write_json(os.path.join(run_dir, "memory_bank.json"), memory_bank)
+        shared.write_json(os.path.join(run_dir, "timing.json"), timings)
+
+    if failed:
+        LOGGER.error(
+            "FAILED categories (%d/%d): %s — partial results kept in %s",
+            len(failed), len(categories), ", ".join(failed), run_dir,
+        )
+        sys.exit(1)
     LOGGER.info("All artifacts in %s", run_dir)
 
 

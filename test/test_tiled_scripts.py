@@ -647,3 +647,82 @@ def test_cross_evaluate_and_load_skip_single_class_category(tmp_path):
     with open(run_dir / "eval" / "results.csv") as handle:
         cats = {r["Category"] for r in csv.DictReader(handle) if r["Category"]}
     assert cats == {"mvtec_bottle"}  # caps skipped with a warning, no crash
+
+
+# ---------------------------------------------------------------------------
+# evaluate_models: memmap (maps_dir) vs in-RAM single-model equivalence
+# ---------------------------------------------------------------------------
+
+def _tiny_tiled_model():
+    from torchvision import models as tv_models
+
+    import patchcore.tiled_patchcore
+
+    backbone = tv_models.wide_resnet50_2(weights=None)
+    backbone.name, backbone.seed = "wideresnet50", 0
+    return patchcore.tiled_patchcore.TiledPatchCore.load(
+        backbone=backbone,
+        layers_to_extract_from=["layer2", "layer3"],
+        device=torch.device("cpu"),
+        tile_size=64,
+        overlap=32,
+        tile_batch_size=4,
+        pretrain_embed_dimension=1024,
+        target_embed_dimension=1024,
+        patchsize=3,
+        patchstride=1,
+        featuresampler=patchcore.sampler.IdentitySampler(),
+        anomaly_scorer_num_nn=1,
+        nn_method=patchcore.common.FaissNN(False, 2),
+    )
+
+
+def test_evaluate_models_memmap_matches_in_ram(tmp_path):
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    _write_script_tree(data_root)
+    train_set, _ = shared.build_dataset(
+        str(data_root), "bottle", "TRAIN", resize=None, imagesize=None,
+        good_only=True, seed=0,
+    )
+    test_set, _ = shared.build_dataset(
+        str(data_root), "bottle", "TEST", resize=None, imagesize=None, seed=0
+    )
+
+    torch.manual_seed(0)
+    model = _tiny_tiled_model()
+    model.fit(shared.build_dataloader(train_set, 1, 0))
+
+    eval_ram = shared.evaluate_models(
+        [(model, True)], shared.build_dataloader(test_set, 1, 0)
+    )
+    eval_mm = shared.evaluate_models(
+        [(model, True)], shared.build_dataloader(test_set, 1, 0),
+        maps_dir=str(tmp_path / "maps"),
+    )
+
+    assert isinstance(eval_mm["segmentations"], np.memmap)
+    assert eval_mm["masks_gt"].dtype == np.uint8
+    np.testing.assert_allclose(
+        np.asarray(eval_mm["segmentations"]),
+        np.asarray(eval_ram["segmentations"]),
+        rtol=1e-5, atol=1e-6,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(eval_mm["masks_gt"]),
+        np.asarray(eval_ram["masks_gt"]).astype(np.uint8),
+    )
+    np.testing.assert_allclose(eval_mm["scores"], eval_ram["scores"], rtol=1e-6)
+    for key in ("auroc", "optimal_threshold"):
+        assert np.isclose(eval_mm["image_metrics"][key], eval_ram["image_metrics"][key])
+        assert np.isclose(eval_mm["pixel_metrics"][key], eval_ram["pixel_metrics"][key])
+        assert np.isclose(
+            eval_mm["anomaly_pixel_metrics"][key],
+            eval_ram["anomaly_pixel_metrics"][key],
+        )
+    # norm_stats must keep the [n_models] shape contract (map_cutoff math)
+    for key in ("score_min", "score_max", "map_min", "map_max"):
+        assert eval_mm["norm_stats"][key].shape == (1,)
+        np.testing.assert_allclose(
+            eval_mm["norm_stats"][key], eval_ram["norm_stats"][key], rtol=1e-6
+        )

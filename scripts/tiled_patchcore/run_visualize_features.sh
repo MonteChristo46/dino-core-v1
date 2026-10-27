@@ -10,8 +10,8 @@ set -euo pipefail
 # Input (dataset mode)
 #DATA_PATH="dataset/40mp"
 #DATA_PATH="/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/BigD"
-DATA_PATH="/home/daniel/jetbrains-projects/glitch-hunt-monolith/services/glitch-hunt-ml/dataset/BigD_synthetic_anomalies_v8"
-CATEGORY="macaroni2"
+DATA_PATH="/home/daniel/jetbrains-projects/dino-core-v1/dataset/_ad2_view"
+CATEGORY="vial"
 SPLIT="test"                  # train | test | val
 N_IMAGES=2                    # first N images of the split
 # ...or explicit images instead (space-separated; empty = dataset mode):

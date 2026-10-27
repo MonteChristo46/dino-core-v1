@@ -29,7 +29,8 @@ def _wr50_backbone():
     return backbone
 
 
-def _tiled_wr50(tile_size, overlap=None, stride=None, sampler=None, image_dim=224):
+def _tiled_wr50(tile_size, overlap=None, stride=None, sampler=None, image_dim=224,
+                bank_cache_dir=None):
     """TiledPatchCore on CPU with an untrained WR50 (mini end-to-end style)."""
     return TiledPatchCore.load(
         backbone=_wr50_backbone(),
@@ -39,6 +40,7 @@ def _tiled_wr50(tile_size, overlap=None, stride=None, sampler=None, image_dim=22
         overlap=overlap,
         stride=stride,
         tile_batch_size=4,
+        bank_cache_dir=bank_cache_dir,
         pretrain_embed_dimension=1024,
         target_embed_dimension=1024,
         patchsize=3,
@@ -304,6 +306,82 @@ def test_predict_contract_dict_dataloader():
         assert seg.shape == (image_dim, image_dim)  # native full-res, not tile size
     assert labels_gt == [0, 1, 0]
     assert len(masks_gt) == 3
+
+
+# ---------------------------------------------------------------------------
+# 5a. memmap-backed bank / maps (MemmapFeatureStore integration)
+# ---------------------------------------------------------------------------
+
+def test_fit_bank_is_memmap_with_exact_pooled_features(tmp_path):
+    """fit must hand the sampler ONE memmap whose content equals the manual
+    per-image concat it replaced (bitwise, fixed seed), and the resulting
+    model must still predict after the temp file is gone."""
+    tile, stride, image_dim = 112, 56, 224
+    sampler = RecordingSampler()
+    torch.manual_seed(7)
+    model = _tiled_wr50(tile, stride=stride, sampler=sampler,
+                        bank_cache_dir=str(tmp_path))
+    training = _dummy_images(2, [3, image_dim, image_dim])
+    loader = torch.utils.data.DataLoader(training, batch_size=2)
+
+    # Reference: what the old list-concat produced, computed on the same
+    # (seeded, deterministic) untrained backbone.
+    reference = np.concatenate(
+        [model._embed_tiled(batch.to(torch.float))[0] for batch in loader], axis=0
+    )
+
+    captured = {}
+    original_run = sampler.run
+    def spy(features):
+        captured["bank"] = features
+        return original_run(features)
+    sampler.run = spy
+    model.fit(loader)
+
+    bank = captured["bank"]
+    assert isinstance(bank, np.memmap)
+    assert bank.shape == reference.shape
+    np.testing.assert_array_equal(np.asarray(bank), reference)
+    # IdentitySampler passes the mapped bank through; fit must have copied it
+    # off the temp file (deleted by now) — predict must still work.
+    scores, masks = model.predict(training[:1])
+    assert np.isfinite(scores).all()
+    assert masks[0].shape == (image_dim, image_dim)
+
+
+def test_predict_dataloader_maps_dir_matches_in_ram(tmp_path):
+    image_dim, tile = 128, 112
+    torch.manual_seed(7)
+    model_ram = _tiled_wr50(tile, stride=tile)
+    torch.manual_seed(7)
+    model_disk = _tiled_wr50(tile, stride=tile)
+    training = _dummy_images(3, [3, image_dim, image_dim])
+    loader = torch.utils.data.DataLoader(training, batch_size=3)
+    model_ram.fit(loader)
+    model_disk.fit(loader)
+
+    masks = torch.zeros(3, 1, image_dim, image_dim)
+    masks[1, :, 10:20, 10:20] = 1.0
+    dataset = _DictDataset(training, masks, [0, 1, 0])
+    s_ram, seg_ram, l_ram, gt_ram = model_ram.predict(
+        torch.utils.data.DataLoader(dataset, batch_size=3)
+    )
+    s_mm, seg_mm, l_mm, gt_mm = model_disk.predict(
+        torch.utils.data.DataLoader(dataset, batch_size=3), maps_dir=str(tmp_path)
+    )
+
+    assert isinstance(seg_mm, np.memmap) and isinstance(gt_mm, np.memmap)
+    assert seg_mm.shape == (3, image_dim, image_dim)
+    assert gt_mm.shape == (3, 1, image_dim, image_dim)
+    assert gt_mm.dtype == np.uint8
+    assert l_ram == l_mm
+    np.testing.assert_allclose(s_mm, s_ram, rtol=1e-5, atol=1e-8)
+    np.testing.assert_allclose(
+        np.asarray(seg_mm), np.asarray(seg_ram), rtol=1e-5, atol=1e-6
+    )
+    np.testing.assert_array_equal(
+        np.asarray(gt_mm), np.asarray(gt_ram).astype(np.uint8)
+    )
 
 
 # ---------------------------------------------------------------------------

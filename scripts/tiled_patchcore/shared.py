@@ -299,16 +299,49 @@ def tile_layout_for_model(model, is_tiled, height, width):
     return model.tile_maker.compute_layout(height, width)
 
 
-def evaluate_models(models, test_dataloader):
+# Pixel-AUROC sample budget. roc_curve on >1G native-resolution pixels costs
+# tens of GB for a rank statistic whose sampling noise at this budget is far
+# below 1e-3 AUROC. Every current MVTec-scale category (<= 219M px) stays
+# full-fidelity; only native-resolution runs get the deterministic subsample.
+_PIXEL_METRIC_SAMPLE_BUDGET = 250_000_000
+
+
+def _normalize_maps_in_place(maps, vmin, denom, chunk_rows=8):
+    """(maps - vmin) / denom in-place, chunked over the image axis.
+
+    In-place keeps peak memory at one chunk for both writable memmaps (the
+    native-resolution path) and fresh in-RAM arrays (no second [N,H,W] copy).
+    """
+    flat = maps.reshape(len(maps), -1)
+    for start in range(0, len(flat), chunk_rows):
+        block = flat[start : start + chunk_rows]
+        block -= vmin
+        block /= denom
+    if isinstance(maps, np.memmap):
+        maps.flush()
+
+
+def evaluate_models(models, test_dataloader, maps_dir=None):
     """Predict with each model, min-max normalize + average (ensemble
     semantics identical to scripts/patchcore/run_patchcore.py), compute
     image- and pixel-level metrics.
+
+    ``maps_dir`` (tiled models only) streams the full-resolution segmentation
+    and GT-mask matrices to memory-mapped files under that directory instead
+    of accumulating them in RAM; the returned "segmentations"/"masks_gt" are
+    then np.memmap arrays. The caller owns the directory's lifetime — the
+    memmaps must not be used after it is deleted.
     """
     raw_scores, raw_segmentations = [], []
     labels_gt, masks_gt, timing = None, None, 0.0
-    for model, _is_tiled in models:
+    for model, is_tiled in models:
         start = time.perf_counter()
-        scores, segmentations, labels_gt, masks_gt = model.predict(test_dataloader)
+        if maps_dir is not None and is_tiled:
+            scores, segmentations, labels_gt, masks_gt = model.predict(
+                test_dataloader, maps_dir=maps_dir
+            )
+        else:
+            scores, segmentations, labels_gt, masks_gt = model.predict(test_dataloader)
         timing += time.perf_counter() - start
         raw_scores.append(scores)
         raw_segmentations.append(segmentations)
@@ -318,16 +351,32 @@ def evaluate_models(models, test_dataloader):
     max_scores = scores.max(axis=-1).reshape(-1, 1)
     scores = np.mean((scores - min_scores) / np.maximum(max_scores - min_scores, 1e-12), axis=0)
 
-    segmentations = np.array(raw_segmentations)
-    seg_min = (
-        segmentations.reshape(len(segmentations), -1).min(axis=-1).reshape(-1, 1, 1, 1)
-    )
-    seg_max = (
-        segmentations.reshape(len(segmentations), -1).max(axis=-1).reshape(-1, 1, 1, 1)
-    )
-    segmentations = np.mean(
-        (segmentations - seg_min) / np.maximum(seg_max - seg_min, 1e-12), axis=0
-    )
+    if len(raw_segmentations) == 1:
+        # Single model: skip the [1, N, H, W] stack + mean (a full-RAM copy of
+        # every map). Min/max are scalar passes; normalization is in-place, so
+        # a memmap input never materializes in RAM at all.
+        seg_maps = raw_segmentations[0]
+        if not isinstance(seg_maps, np.ndarray):
+            seg_maps = np.asarray(seg_maps)
+        seg_min_1d = np.array([float(np.min(seg_maps))])
+        seg_max_1d = np.array([float(np.max(seg_maps))])
+        _normalize_maps_in_place(
+            seg_maps, seg_min_1d[0], max(seg_max_1d[0] - seg_min_1d[0], 1e-12)
+        )
+        segmentations = seg_maps
+    else:
+        segmentations = np.array(raw_segmentations)
+        seg_min = (
+            segmentations.reshape(len(segmentations), -1).min(axis=-1).reshape(-1, 1, 1, 1)
+        )
+        seg_max = (
+            segmentations.reshape(len(segmentations), -1).max(axis=-1).reshape(-1, 1, 1, 1)
+        )
+        segmentations = np.mean(
+            (segmentations - seg_min) / np.maximum(seg_max - seg_min, 1e-12), axis=0
+        )
+        seg_min_1d = seg_min.reshape(-1)
+        seg_max_1d = seg_max.reshape(-1)
     # Keep the four normalization constants. Scores are min-max normalized over
     # *image* scores, maps over *all pixels*: the two [0,1] scales have the same
     # top but different bottoms, so a threshold cannot be read off a map directly.
@@ -335,8 +384,8 @@ def evaluate_models(models, test_dataloader):
     norm_stats = {
         "score_min": min_scores.reshape(-1),
         "score_max": max_scores.reshape(-1),
-        "map_min": seg_min.reshape(-1),
-        "map_max": seg_max.reshape(-1),
+        "map_min": seg_min_1d,
+        "map_max": seg_max_1d,
     }
 
     anomaly_labels = [
@@ -353,16 +402,27 @@ def evaluate_models(models, test_dataloader):
     )
     if has_gt_masks:
         pixel_metrics = patchcore.metrics.compute_pixelwise_retrieval_metrics(
-            segmentations, masks_gt
+            segmentations, masks_gt, max_pixels=_PIXEL_METRIC_SAMPLE_BUDGET
         )
         sel_idxs = [i for i in range(len(masks_gt)) if np.sum(masks_gt[i]) > 0]
         anomaly_pixel_metrics = (
             patchcore.metrics.compute_pixelwise_retrieval_metrics(
-                [segmentations[i] for i in sel_idxs], [masks_gt[i] for i in sel_idxs]
+                [segmentations[i] for i in sel_idxs], [masks_gt[i] for i in sel_idxs],
+                max_pixels=_PIXEL_METRIC_SAMPLE_BUDGET,
             )
             if sel_idxs
             else None
         )
+        for name, metric in (("full", pixel_metrics),
+                             ("anomaly-only", anomaly_pixel_metrics)):
+            total_pixels = int(np.prod(segmentations.shape)) if name == "full" else None
+            if metric and total_pixels and metric["pixel_metric_samples"] < total_pixels:
+                LOGGER.info(
+                    "Pixel AUROC (%s) evaluated on a deterministic subsample of "
+                    "%d / %d pixels (budget %d).",
+                    name, metric["pixel_metric_samples"], total_pixels,
+                    _PIXEL_METRIC_SAMPLE_BUDGET,
+                )
     else:
         pixel_metrics = None
         anomaly_pixel_metrics = None
